@@ -89,7 +89,7 @@ class SimpleWorkflowRunner:
         entry = entry_id(graph)
         if entry is None:
             # 拓扑阶段要求 start 有且仅有一个，所以走到这儿说明图没过校验
-            raise RuntimeError("工作流没有 start 节点，无法确定入口")
+            raise RuntimeError("工作流没有触发节点，无法确定入口")
 
         runnable = reachable_from(out_edges, entry)
 

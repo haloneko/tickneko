@@ -90,7 +90,7 @@ store ──────────────► models
 | 阶段 | 查什么 | 典型错误码 |
 |---|---|---|
 | ① 结构 | 能不能解析成图、节点 id 唯一、边端点存在、主流程上的类型都已注册（孤儿类型不查） | `UNKNOWN_NODE_TYPE` |
-| ② 拓扑 | **只看 start 可达的主流程**：start 唯一、至少一个可达 end、无环（Kahn）、注册的出入边约束（分流类节点 ≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
+| ② 拓扑 | **只看触发节点可达的主流程**：触发节点（`role="start"` 的消息 / 定时 / 事件触发）有且仅有 1 个、至少一个可达 end、无环（Kahn）、注册的出入边约束（分流类节点 ≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
 | ③ 语义 | 注册字段必填、节点自注册校验器（trigger/cron、log level、http method）、**连线**（端口存在 / 两端同类 / 必填入口接上没）、表达式语法；**全部只查主流程节点** | `MISSING_CONFIG` / `INPUT_NOT_CONNECTED` / `UNKNOWN_PORT` / `PORT_TYPE_MISMATCH` / `DUPLICATE_INPUT_EDGE` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
 | ④ Dry Run | **还没接**：只留了阶段名常量 `STAGE_DRY_RUN`，等执行引擎就位再加 | —— |
 

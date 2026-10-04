@@ -262,8 +262,8 @@ def _topology_stage(
         errors.append(
             ValidationIssue(
                 code="START_NOT_UNIQUE",
-                message=f"start 节点必须有且仅有 1 个，当前有 {len(starts)} 个",
-                suggestion="保留一个 start 作为唯一入口",
+                message=f"触发节点必须有且仅有 1 个，当前有 {len(starts)} 个",
+                suggestion="保留一个触发节点作为唯一入口（消息触发 / 定时触发 / 事件触发）",
             )
         )
         # 入口不唯一时主流程无从界定，后续检查不跑（可达域给空集，语义阶段也不会误报）
@@ -281,7 +281,7 @@ def _topology_stage(
         errors.append(
             ValidationIssue(
                 code="END_MISSING",
-                message="从 start 可达的路径上没有 end 节点（至少 1 个）",
+                message="从触发节点可达的路径上没有 end 节点（至少 1 个）",
                 suggestion="给主流程接一个 end 出口（没接进来的 end 不算）",
             )
         )
