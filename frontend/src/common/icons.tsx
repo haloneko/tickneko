@@ -156,6 +156,15 @@ export const IconPaste = (p: IconProps) => (
   </svg>
 )
 
+/** 剪切：剪刀（两个刃口对着上下两个环） */
+export const IconScissors = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="6.4" cy="6.4" r="2.7" />
+    <circle cx="6.4" cy="17.6" r="2.7" />
+    <path d="M20 4.4L8.6 15.8M20 19.6L8.6 8.2M14.6 13.8L12 12" />
+  </svg>
+)
+
 export const IconExternal = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M7 17L17 7M9 7h8v8" />

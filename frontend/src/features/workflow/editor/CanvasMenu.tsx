@@ -18,7 +18,6 @@ const SUBMENU_W = 184
 const PASTE_H = 32
 const SEP_H = 9
 const TITLE_H = 27
-const HEAD_H = PASTE_H + SEP_H + TITLE_H
 //: 每个分类一行
 const ROW_H = 32
 //: 二级菜单最大高度（与 CSS 的 max-height 同一口径）
@@ -31,19 +30,23 @@ export interface CanvasMenuProps {
   /** 节点类型目录（后端给的，与左侧面板同一份） */
   items: NodeTypeSpec[]
   menuRef: React.RefObject<HTMLDivElement>
+  /** 剪贴板里有没有能贴的：没有就整行不显示 */
+  canPaste: boolean
   /** 在右键那一处粘贴剪贴板内容（位置由父组件补） */
   onPaste: () => void
   onAdd: (type: string) => void
 }
 
-export function CanvasMenu({ x, y, items, menuRef, onPaste, onAdd }: CanvasMenuProps) {
+export function CanvasMenu({ x, y, items, menuRef, canPaste, onPaste, onAdd }: CanvasMenuProps) {
   /** 当前展开的分类（null = 都收着） */
   const [openCategory, setOpenCategory] = useState<string | null>(null)
   const groups = groupByCategory(items)
 
+  /** 顶部固定内容的高度：「粘贴」那一行可能没有（剪贴板空着就整行不显示） */
+  const headH = TITLE_H + (canPaste ? PASTE_H + SEP_H : 0)
   const left = Math.max(8, Math.min(x, window.innerWidth - MENU_W - 8))
   // 高度按行数估：贴到下沿就整份往上挪（分类多的时候不至于把最后几个分类顶出屏幕）
-  const menuH = HEAD_H + groups.length * ROW_H
+  const menuH = headH + groups.length * ROW_H
   const top = Math.max(8, Math.min(y, Math.max(8, window.innerHeight - menuH - 8)))
   // 右边放不下二级菜单：整份菜单往左翻（一级菜单的 x 也夹回视口内）
   const flipX = left + MENU_W + SUBMENU_W > window.innerWidth
@@ -56,15 +59,19 @@ export function CanvasMenu({ x, y, items, menuRef, onPaste, onAdd }: CanvasMenuP
       onContextMenu={(e) => e.preventDefault()}
       onMouseLeave={() => setOpenCategory(null)}
     >
-      <button className={styles.ctxMenuItem} onClick={onPaste}>
-        <IconPaste size={14} />
-        粘贴
-      </button>
-      <div className={styles.ctxMenuSep} />
+      {canPaste && (
+        <>
+          <button className={styles.ctxMenuItem} onClick={onPaste}>
+            <IconPaste size={14} />
+            粘贴
+          </button>
+          <div className={styles.ctxMenuSep} />
+        </>
+      )}
       <div className={styles.ctxMenuTitle}>添加节点</div>
       {groups.map(([category, specs], idx) => {
         // 这一行的二级菜单如果展开，会从行的位置向下长 SUBMENU_MAX_H：装不下就改为向上长
-        const rowBottom = top + HEAD_H + (idx + 1) * ROW_H
+        const rowBottom = top + headH + (idx + 1) * ROW_H
         const flipY = rowBottom + SUBMENU_MAX_H > window.innerHeight - 8
         return (
           <div key={category} className={styles.ctxSubWrap} onMouseEnter={() => setOpenCategory(category)}>

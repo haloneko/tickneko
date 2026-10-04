@@ -126,6 +126,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
    * 右键菜单的「粘贴」不走这一步 —— 鼠标已经指名了落点，一步到位（见 ``pasteAt``）。
    */
   const [placing, setPlacing] = useState<Placing | null>(null)
+  /**
+   * 剪贴板里有没有能贴的东西 —— 右键菜单据此决定**显不显示「粘贴」**。
+   *
+   * 它只是界面用的镜像（真值在 ``clipboardRef`` 与系统剪贴板里）：复制 / 剪切写内存时置真；
+   * 打开编辑器时探一次系统剪贴板，把上次会话 / 别的标签页复制过的那份也算上。
+   */
+  const [hasClipboard, setHasClipboard] = useState(false)
   /** 节点库拖出的新节点虚影：x/y = 鼠标的画布坐标（null = 没拖 / 不在画布上） */
   const [newDrag, setNewDrag] = useState<{ type: string; x: number; y: number } | null>(null)
   /**
@@ -291,6 +298,21 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   useEffect(() => {
     void loadCatalog()
   }, [loadCatalog])
+
+  /**
+   * 打开编辑器时探一次**系统**剪贴板：上一会话 / 别的标签页里复制的那份也能贴。
+   * 读不到（没权限、非安全上下文、Firefox 要手势）就当没有 —— 菜单里先不显示「粘贴」，
+   * 复制 / 剪切或成功 Ctrl+V 一次之后自然会显出来。
+   */
+  useEffect(() => {
+    let alive = true
+    void readText().then((text) => {
+      if (alive && parseClipboard(text)) setHasClipboard(true)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // ---- 节点操作 ----
   const addNode = useCallback(
@@ -732,6 +754,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           .map((e) => structuredClone(e)),
       )
       clipboardRef.current = payload
+      setHasClipboard(true)
       void copyText(serializeClipboard(payload)).catch(() => {
         pushToast('error', '写入系统剪贴板失败（画布内剪贴板仍可用）')
       })
@@ -744,6 +767,22 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const copySelection = useCallback(
     (): number => copyNodes(getSelectionIds()),
     [copyNodes, getSelectionIds],
+  )
+
+  /**
+   * 剪切 = 复制 + 删除（Ctrl+X / 右键菜单共用）；返回复制到的节点数（0 = 没得剪，调用方别再删）。
+   *
+   * 先复制后删：复制失败（空选择）就不动图，别把节点删没了却什么都没进剪贴板。
+   */
+  const cutNodes = useCallback(
+    (ids: Iterable<string>): number => {
+      const list = [...ids]
+      const copied = copyNodes(list)
+      if (copied === 0) return 0
+      deleteNodesByIds(list)
+      return copied
+    },
+    [copyNodes, deleteNodesByIds],
   )
 
   /**
@@ -762,6 +801,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     const payload = pickFresherClipboard(local, system)
     if (!payload) return null
     clipboardRef.current = payload
+    setHasClipboard(true)
     if (payload !== local) {
       // 用的是系统剪贴板那一份：说清它是哪儿来的、什么时候拷的
       const when = formatCopiedAt(payload.copiedAt)
@@ -914,9 +954,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       }
 
       if (mod && (key === 'c' || key === 'x')) {
-        if (copySelection() === 0) return // 没选中什么就不劫持
+        // Ctrl+C 复制当前选择；Ctrl+X 走同一条「复制 + 删除」
+        const copied = key === 'x' ? cutNodes(getSelectionIds()) : copySelection()
+        if (copied === 0) return // 没选中什么就不劫持
         e.preventDefault()
-        if (key === 'x') deleteNodesByIds([...getSelectionIds()])
         return
       }
 
@@ -939,7 +980,17 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [drafting, draft, undo, copySelection, getSelectionIds, startPlacing, deleteNodesByIds, placing])
+  }, [
+    drafting,
+    draft,
+    undo,
+    copySelection,
+    cutNodes,
+    getSelectionIds,
+    startPlacing,
+    deleteNodesByIds,
+    placing,
+  ])
 
   // ---- 渲染辅助 ----
   const selectedNode = selectedId ? nodeById.get(selectedId) ?? null : null
@@ -1119,11 +1170,16 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         )}
       </div>
 
-      {/* 右键菜单（节点复制 / 粘贴 / 删除、空白粘贴 / 添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
+      {/* 右键菜单（节点删除 / 空白添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
       <ContextMenuHost
         state={menuState}
         menuRef={menuRef}
         catalog={palette}
+        canPaste={hasClipboard}
+        onCutNodes={(ids) => {
+          cutNodes(ids)
+          closeMenu()
+        }}
         onCopyNodes={(ids) => {
           copyNodes(ids)
           closeMenu()
