@@ -1,8 +1,8 @@
 /**
  * 右键菜单的**唯一出口**：按 ``state.kind`` 决定画哪一份菜单。
  *
- * 两份菜单组件（节点删除 / 空白处添加节点）各自独立，调用方不必管「现在开的是哪一份」，也不用
- * 维护两个状态、两个 ref —— 只把状态与两个动作（删节点 / 加节点）递进来。
+ * 两份菜单组件（节点复制 / 删除、空白处添加节点）各自独立，调用方不必管「现在开的是哪一份」，
+ * 也不用维护两个状态、两个 ref —— 只把状态与三个动作（复制 / 删节点 / 加节点）递进来。
  */
 import { ContextMenu } from './ContextMenu'
 import { CanvasMenu } from './CanvasMenu'
@@ -14,6 +14,8 @@ export interface ContextMenuHostProps {
   menuRef: React.RefObject<HTMLDivElement>
   /** 空白菜单要用的节点目录：还没拉回来就没得可加，这时不画 */
   catalog: NodeTypeSpec[] | null
+  /** 节点菜单：复制（单选就是它自己，多选就是整组） */
+  onCopyNodes: (ids: string[]) => void
   /** 节点菜单：删除（可能是一组） */
   onDeleteNodes: (ids: string[]) => void
   /** 空白菜单：在 ``at`` 这一处添加该类型的节点 */
@@ -24,6 +26,7 @@ export function ContextMenuHost({
   state,
   menuRef,
   catalog,
+  onCopyNodes,
   onDeleteNodes,
   onAddNode,
 }: ContextMenuHostProps) {
@@ -35,6 +38,7 @@ export function ContextMenuHost({
         y={state.y}
         ids={state.ids}
         menuRef={menuRef}
+        onCopy={onCopyNodes}
         onDelete={onDeleteNodes}
       />
     )

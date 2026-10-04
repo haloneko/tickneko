@@ -708,27 +708,37 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }, [selectedIds, selectedId])
 
   /**
-   * 复制选中节点 + 组内连线（Ctrl+C / Ctrl+X 共用）；返回复制到的节点数。
+   * 复制这些节点 + 组内连线；返回复制到的节点数。集合由调用方给：快捷键给的是「当前选择」，
+   * 右键菜单给的是「这一次右键的那一组」。
    *
    * **双重保险**：内存里的 clipboardRef（同步可用）+ 系统剪贴板（活过刷新 / 能跨标签页）。
    * 负载里带上**复制时刻**（copiedAt），从系统剪贴板捞回来时能答出这是什么时候拷的。
    * 写系统剪贴板是异步的，也不一定成功（非安全上下文 / 没权限），失败不影响第一重。
    */
-  const copySelection = useCallback((): number => {
-    const ids = getSelectionIds()
-    if (ids.size === 0) return 0
-    const payload = buildClipboardPayload(
-      graph.nodes.filter((n) => ids.has(n.id)).map((n) => structuredClone(n)),
-      graph.edges
-        .filter((e) => ids.has(e.source) && ids.has(e.target))
-        .map((e) => structuredClone(e)),
-    )
-    clipboardRef.current = payload
-    void copyText(serializeClipboard(payload)).catch(() => {
-      pushToast('error', '写入系统剪贴板失败（画布内剪贴板仍可用）')
-    })
-    return payload.nodes.length
-  }, [graph, getSelectionIds, pushToast])
+  const copyNodes = useCallback(
+    (ids: Iterable<string>): number => {
+      const set = new Set(ids)
+      if (set.size === 0) return 0
+      const payload = buildClipboardPayload(
+        graph.nodes.filter((n) => set.has(n.id)).map((n) => structuredClone(n)),
+        graph.edges
+          .filter((e) => set.has(e.source) && set.has(e.target))
+          .map((e) => structuredClone(e)),
+      )
+      clipboardRef.current = payload
+      void copyText(serializeClipboard(payload)).catch(() => {
+        pushToast('error', '写入系统剪贴板失败（画布内剪贴板仍可用）')
+      })
+      return payload.nodes.length
+    },
+    [graph, pushToast],
+  )
+
+  /** Ctrl+C / Ctrl+X 走这条：复制的是「当前选择」 */
+  const copySelection = useCallback(
+    (): number => copyNodes(getSelectionIds()),
+    [copyNodes, getSelectionIds],
+  )
 
   /**
    * 取当前剪贴板内容：内存与系统剪贴板**都读**，谁新听谁的。
@@ -1070,11 +1080,15 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         )}
       </div>
 
-      {/* 右键菜单（节点删除 / 空白添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
+      {/* 右键菜单（节点复制 / 删除、空白添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
       <ContextMenuHost
         state={menuState}
         menuRef={menuRef}
         catalog={palette}
+        onCopyNodes={(ids) => {
+          copyNodes(ids)
+          closeMenu()
+        }}
         onDeleteNodes={(ids) => {
           deleteNodesByIds(ids)
           closeMenu()
