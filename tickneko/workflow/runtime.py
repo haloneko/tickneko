@@ -154,17 +154,25 @@ def _message_start_ids(graph: WorkflowGraph) -> set[str]:
     """图里 ``trigger=message`` 的开始节点 id 集合（图是 ``WorkflowGraph``）。
 
     消息触发与时间触发分走两条登记路：时间触发登记到调度器（cron），消息触发登记到
-    :class:`MessageRouter`（按 owner 路由）。这里只负责认「哪些开始节点是消息触发」，
-    依据是 start 节点 ``config.trigger``（缺省 ``message``，见 :mod:`tickneko.workflow.nodes.start`）。
+    :class:`MessageRouter`（按 owner 路由）。这里只负责认「哪些开始节点是消息触发」——
+    依据是**节点类型** ``trigger-message``（见 :mod:`tickneko.workflow.nodes.triggers`）。
     """
-    message_starts: set[str] = set()
-    for node in graph.nodes:
-        spec = get_spec(node.type)
-        if spec is None or spec.role != "start":
-            continue
-        if str(node.config.get("trigger", "message")) != "time":
-            message_starts.add(node.id)
-    return message_starts
+    # 触发器拆成三个节点之后，触发方式由**节点类型**直接决定（不再看 config）
+    return {node.id for node in graph.nodes if node.type == "trigger-message"}
+
+
+def _event_start_ids(graph: WorkflowGraph) -> dict[str, str]:
+    """图里**事件触发**的开始节点：``节点 id -> 订阅的事件类型``（``"*"`` = 任何事件）。
+
+    与 :func:`_message_start_ids` 同一条依据（节点类型），订阅的事件类型一起带出来给
+    :class:`EventRouter` 登记。
+    """
+    # 没填（校验会拦）就按「任何事件」处理，登记那一趟别因此崩掉
+    return {
+        node.id: str(node.config.get("event_type", "") or "*")
+        for node in graph.nodes
+        if node.type == "trigger-event"
+    }
 
 
 async def register_published_workflow(
@@ -175,11 +183,12 @@ async def register_published_workflow(
     *,
     gateway: Any | None = None,
     message_router: MessageRouter | None = None,
+    event_router: EventRouter | None = None,
 ) -> int:
     """**只跑开始节点、不跑下游**：把这一版的触发登记好，返回跑过的开始节点数量。
 
     时间触发的开始节点，执行器做的就是「按 cron 把整条流程登记到调度器」（见
-    :func:`tickneko.workflow.nodes.start.exec_start`）；消息触发的登记到
+    :func:`tickneko.workflow.nodes.triggers.exec_trigger_time`）；消息触发的登记到
     :class:`MessageRouter`（按 owner 路由，消息进来时跑）。两种都只处理**开始节点自己**，
     后面的节点一个都不跑 —— 启动载入不是执行。以前这里是「跑一遍整张图，靠开始节点顺带
     登记」，代价是每次开机都真的把整条流程执行一次（下游的 http / log 全都跟着跑了），
@@ -208,6 +217,7 @@ async def register_published_workflow(
     graph = record.graph()
     starts = set(start_ids(graph.nodes))
     message_starts = _message_start_ids(graph)
+    event_starts = _event_start_ids(graph)
     # 登记时给的到点回调是「跑整条流程」那个（与到点触发同一条路）；
     # register_triggers=True：这才是「登记那一趟」，开始节点据此去调度器加 / 改任务
     ctx = NodeExecutionContext(
@@ -236,6 +246,24 @@ async def register_published_workflow(
             log.info("已登记消息触发", version=version, node_id=node.id)
             primed += 1
             continue
+        if node.id in event_starts:
+            # 事件触发：登记到事件路由（按 owner + 订阅的事件类型匹配），不跑执行器
+            if event_router is None:
+                log.warning(
+                    "事件触发的开始节点未注入事件路由，跳过登记",
+                    version=version,
+                    node_id=node.id,
+                )
+                continue
+            event_router.register(workflow_id, version, owner_id, event_starts[node.id])
+            log.info(
+                "已登记事件触发",
+                version=version,
+                node_id=node.id,
+                event_type=event_starts[node.id],
+            )
+            primed += 1
+            continue
         executor = get_executor(node.type)
         if executor is None:
             log.warning(
@@ -257,10 +285,11 @@ async def stop_published_workflow(
     scheduler: TaskManager,
     *,
     message_router: MessageRouter | None = None,
+    event_router: EventRouter | None = None,
 ) -> int:
-    """把这一版里**开始节点登记过的触发**摘掉（定时任务 + 消息路由），返回摘掉的数量。
+    """把这一版里**开始节点登记过的触发**摘掉（定时任务 + 消息 / 事件路由），返回摘掉的数量。
 
-    与登记对称：定时任务名由 :func:`tickneko.workflow.nodes.start.workflow_task_id` 定
+    与登记对称：定时任务名由 :func:`tickneko.workflow.nodes.triggers.workflow_task_id` 定
     （``wf-<工作流 id>-<节点 id>``），照图里的开始节点算一遍 id 去摘；消息触发的从
     :class:`MessageRouter` 摘除（按 workflow_id）—— **不用把图跑一遍**（那是执行，不是停机）。
 
@@ -277,19 +306,108 @@ async def stop_published_workflow(
 
     graph = record.graph()
     message_starts = _message_start_ids(graph)
+    event_starts = _event_start_ids(graph)
     removed = 0
     # 消息触发按 workflow 摘一次（多个消息 start 节点共享同一路由条目，别重复计）
     if message_starts and message_router is not None:
         message_router.unregister(workflow_id, owner_id)
         removed += 1
+    # 事件触发同理：一条工作流一个路由条目（订阅的事件类型跟着版本走，直接整条摘掉）
+    if event_starts and event_router is not None:
+        if event_router.unregister(workflow_id, owner_id):
+            removed += 1
     for node_id in start_ids(graph.nodes):
-        if node_id in message_starts:
+        if node_id in message_starts or node_id in event_starts:
             continue
         if scheduler.remove(workflow_task_id(workflow_id, node_id)):
             removed += 1
     if removed:
         log.info("已停止触发", version=version, count=removed)
     return removed
+
+
+class EventRouter:
+    """事件触发的登记处：按**归属 + 订阅的事件类型**找到匹配的工作流，事件进来时逐个跑。
+
+    与 :class:`MessageRouter` 平行：那条是「来消息就跑」，这条是「来了**订阅的那种**事件
+    才跑」—— 平台事件（加好友请求、进群、撤回、戳一戳…）不是消息，不该每条都把工作流拉起来。
+
+    匹配口径：节点上 ``event_type`` 填 ``"*"`` 表示任何事件都触发，其余与事件的原生类型名
+    （``trigger_data["event_type"]``）**全等**才触发 —— 不做前缀匹配：订阅
+    ``group_increase`` 的图不该被 ``group_decrease`` 拉起来。
+
+    同样的两趟口径：登记 / 摘除只在「登记那一趟」（拨开关 / 启动载入 / 发布新版）发生，
+    ``dispatch`` 是执行那一趟，**不碰登记表**。
+
+    **本模块不 import bridge**：它只认普通数据（``trigger_data`` 里的 ``event_type`` /
+    ``user_id``…），「平台事件拆成这些普通数据」由装配层（bootstrap）做。
+    """
+
+    def __init__(self) -> None:
+        #: owner_id -> { workflow_id -> (version, 订阅的事件类型) }
+        self._routes: dict[str, dict[str, tuple[int, str]]] = {}
+        #: 事件来了「跑整条流程」要用的回调；装配时注入（见 :meth:`attach`）
+        self._run: Callable[..., Awaitable[object]] | None = None
+
+    def attach(self, run: Callable[..., Awaitable[object]]) -> None:
+        """注入「跑整条流程」的回调：``dispatch`` 拿它执行匹配的工作流。
+
+        回调签名是 ``(workflow_id, version, *, trigger_data=..., user_id=...) -> Awaitable``。
+        """
+        self._run = run
+
+    def register(self, workflow_id: str, version: int, owner_id: str, event_type: str) -> None:
+        """登记一条事件触发（同一工作流重复登记按新版本覆盖）。"""
+        self._routes.setdefault(owner_id, {})[workflow_id] = (version, event_type)
+
+    def unregister(self, workflow_id: str, owner_id: str) -> bool:
+        """摘掉一条事件触发；真摘掉了返回 ``True``。"""
+        routes = self._routes.get(owner_id)
+        if not routes or workflow_id not in routes:
+            return False
+        routes.pop(workflow_id)
+        if not routes:
+            self._routes.pop(owner_id, None)  # 这个归属下没别的了，连空壳一起清掉
+        return True
+
+    def routes_of(self, owner_id: str) -> dict[str, tuple[int, str]]:
+        """某个归属下登记过的事件触发快照（``{workflow_id: (version, event_type)}``）。"""
+        return dict(self._routes.get(owner_id, {}))
+
+    async def dispatch(self, owner_id: str, *, trigger_data: Mapping[str, Any]) -> int:
+        """事件进来：跑这个归属下**订阅了这种事件**的工作流，返回跑过的条数。
+
+        * 每个工作流都拿同一份 ``trigger_data``（事件数据）与 ``user_id``（事件相关的人，
+          从 ``trigger_data`` 里取）；
+        * 单个工作流抛异常不影响其它（记 error 继续），异常不冒给调用方 —— 一个事件不该
+          因为某条工作流坏了就没人处理。
+        """
+        routes = self._routes.get(owner_id)
+        if not routes or self._run is None:
+            return 0
+        event_type = str(trigger_data.get("event_type", ""))
+        ran = 0
+        for workflow_id, (version, wanted) in list(routes.items()):
+            if wanted != "*" and wanted != event_type:
+                continue
+            try:
+                await self._run(
+                    workflow_id,
+                    version,
+                    trigger_data=trigger_data,
+                    user_id=str(trigger_data.get("user_id", "") or ""),
+                )
+                ran += 1
+            except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能淹其它
+                _log_run_failure(
+                    _log(),
+                    "事件触发的工作流执行失败",
+                    exc,
+                    workflow_id=workflow_id,
+                    version=version,
+                    event_type=event_type,
+                )
+        return ran
 
 
 class MessageRouter:
@@ -383,7 +501,8 @@ class WorkflowTriggers:
 
     ``gateway``（平台总线，可选）装配时给：拨开关即时生效走的是这儿的登记，登记构造的
     到点闭包要带上它（见 :func:`make_trigger`），``send`` 节点到点执行那一趟也要能拿得到它。
-    ``message_router``（可选）同理：消息触发的登记 / 摘除也走这儿。
+    ``message_router``（可选）同理：消息触发的登记 / 摘除也走这儿；``event_router``
+    （可选）是事件触发那一档。
     """
 
     def __init__(
@@ -393,11 +512,13 @@ class WorkflowTriggers:
         *,
         gateway: Any | None = None,
         message_router: MessageRouter | None = None,
+        event_router: EventRouter | None = None,
     ) -> None:
         self._store: SqlWorkflowStore = store
         self._scheduler: TaskManager = scheduler
         self._gateway: Any | None = gateway
         self._message_router: MessageRouter | None = message_router
+        self._event_router: EventRouter | None = event_router
 
     async def start(self, workflow_id: str, version: int) -> int:
         """登记这一版的触发（重复调用幂等），返回跑过的开始节点数量。"""
@@ -408,6 +529,7 @@ class WorkflowTriggers:
             self._scheduler,
             gateway=self._gateway,
             message_router=self._message_router,
+            event_router=self._event_router,
         )
 
     async def stop(self, workflow_id: str, version: int) -> int:
@@ -418,6 +540,7 @@ class WorkflowTriggers:
             self._store,
             self._scheduler,
             message_router=self._message_router,
+            event_router=self._event_router,
         )
 
 
@@ -427,6 +550,7 @@ async def load_published_workflows(
     *,
     gateway: Any | None = None,
     message_router: MessageRouter | None = None,
+    event_router: EventRouter | None = None,
     page_size: int = 500,
 ) -> int:
     """启动时把**开着运行开关**的已发布工作流登记就绪，返回载入的开始节点数量。
@@ -486,6 +610,7 @@ async def load_published_workflows(
                     scheduler,
                     gateway=gateway,
                     message_router=message_router,
+                    event_router=event_router,
                 )
                 registered += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能挡住启动

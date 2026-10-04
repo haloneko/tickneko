@@ -11,8 +11,8 @@
  * 节点类型与**端口类型**都不在前端定义：后端给什么就画什么，认不出的节点类型只给一对触发口
  * 兜底（保存时会被 ``UNKNOWN_NODE_TYPE`` 拦下）、认不出的端口类型一律淡灰。**节点颜色**也
  * 由后端目录下发（认不出的类型才用兜底色）。这里只留前端自己的东西：运行时端口类型表（由
- * ``installCatalog`` 从目录的 ``port_types`` 装进来）与两个**固有例外**（``start`` 的端口随
- * ``config.trigger`` 变；``constant`` 的常量就是它的 config 本身）。
+ * ``installCatalog`` 从目录的 ``port_types`` 装进来）与一个**固有例外**（``constant`` 的常量
+ * 就是它的 config 本身）。
  */
 import {
   type NodeCategorySpec,
@@ -220,8 +220,7 @@ export const DEFAULT_PORT = 'trigger'
 //: 认不出的节点类型 / 后端没配色的兜底色
 const DEFAULT_COLOR = '#64748b'
 
-/** start 时间形态换色（面板上「开始」只有一个入口，节点按触发方式区分） */
-const START_TIME_COLOR = '#f59e0b'
+
 
 // --------------------------------------------------------------------------- 尺寸
 export const NODE_W = 168
@@ -254,7 +253,8 @@ export function installCatalog(catalog: NodeCatalog): NodeTypeSpec[] {
 
 /**
  * ``nodeDef`` 的推导结果缓存：一次渲染里每个节点都要算一遍（卡片 + 连线 + 框选），
- * 而结果只取决于「类型 + start 的 trigger」，装目录时才需要清。
+ * 而结果只取决于**节点类型**（触发器拆成三个之后，不再有「形状随 config 变」的类型），
+ * 装目录时才需要清。
  */
 const DEF_CACHE = new Map<string, NodeTypeDef>()
 
@@ -262,18 +262,19 @@ const DEF_CACHE = new Map<string, NodeTypeDef>()
  * 取节点类型定义（渲染用）：端口 / 字段 / 中文名 / 顺序 / 颜色全部来自后端目录（认不出的
  * 类型用兜底色），并按 config 处理上面说的两个固有例外。
  */
-export function nodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
-  // start 是唯一「形状随 config 变」的类型，把它那一项也进 key
-  const key = `${type}|${typeof config?.trigger === 'string' ? config.trigger : ''}`
+export function nodeDef(type: string, _config?: Record<string, unknown>): NodeTypeDef {
+  // ``_config`` 留着只为调用方签名不变：触发器拆成三个节点之后，**形状不再随 config 变**
+  // （以前 start 的端口要看 config.trigger），所以它不参与推导，也不进缓存键。
+  const key = type
   const cached = DEF_CACHE.get(key)
   if (cached) return cached
 
-  const def = computeNodeDef(type, config)
+  const def = computeNodeDef(type)
   DEF_CACHE.set(key, def)
   return def
 }
 
-function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTypeDef {
+function computeNodeDef(type: string): NodeTypeDef {
   const spec = CATALOG[type]
   if (spec === undefined) {
     // 认不出的类型：不猜它的端口，只给一对触发口让它还能画出来（这是兜底，不是定义）
@@ -311,39 +312,7 @@ function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTyp
     fields: [...spec.fields],
   }
 
-  if (spec.type === 'start') {
-    // 例外：时间形态只出触发端口，卡片上只显示 cron（消息形态两者都不显示）
-    if (config?.trigger !== 'time') return { ...base, constants: [] }
-    return {
-      ...base,
-      label: `${base.label} · 时间`,
-      color: START_TIME_COLOR,
-      outputs: base.outputs.filter((port) => port.id === 'trigger'),
-      constants: ['cron'],
-    }
-  }
   return base
-}
-
-/**
- * 哪些字段**有专门的编辑器**，通用渲染要跳过（不然会出现两个控件）。
- *
- * 两个：start 的 ``trigger``（改它得顺手增删 cron，不是单纯改一个值）与 ``cron``
- * （走 :mod:`common/CronPicker` 可视化选择 —— 手填表达式太容易写错）。
- */
-export function hasDedicatedEditor(nodeType: string, fieldName: string): boolean {
-  return nodeType === 'start' && (fieldName === 'trigger' || fieldName === 'cron')
-}
-
-/** start 的触发方式选项同样来自后端目录；label 用一句人话解释，认不出的值原样显示。 */
-export const TRIGGER_LABELS: Record<string, string> = {
-  message: '消息触发（无需配置）',
-  time: '时间触发（cron 定时）',
-}
-
-export function triggerOptionsOf(): string[] {
-  const field = CATALOG['start']?.fields.find((item) => item.name === 'trigger')
-  return field?.options ?? ['message']
 }
 
 // --------------------------------------------------------------------------- 几何

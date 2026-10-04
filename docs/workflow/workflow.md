@@ -21,7 +21,7 @@ tickneko/workflow/
 ├── nodes/           ★ 节点执行器：一类节点一个文件 + 注册表（**写自己的节点看这里**）
 │   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / NodeExecutionContext
 │   ├── registry.py      注册表：register_node / declare_node_type / get_spec / load_node_modules
-│   ├── start.py         内置：start（图起点；trigger=time 时按 cron 登记调度器）
+│   ├── triggers.py      内置：三个触发器（trigger-message 消息 / trigger-time 定时 / trigger-event 事件）
 │   ├── end.py           内置：end（图终点）
 │   ├── log.py           内置：log（按级别写业务日志；内容从 message 入口来）
 │   ├── test.py          内置：test（调试：回显入口的值到日志，画布联调用）
@@ -41,7 +41,7 @@ tickneko/workflow/
 │   └── placeholder.py   内置：placeholder（占位：只透传不做事，参与画布理线）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据** + **按选中出口剪枝**
-└── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
+└── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记触发（定时 / 消息 / 事件，不执行图）；
                      到点后加载该版本跑整条流程；拨开关即时启停（WorkflowTriggers）
 ```
 
@@ -90,7 +90,7 @@ store ──────────────► models
 | 阶段 | 查什么 | 典型错误码 |
 |---|---|---|
 | ① 结构 | 能不能解析成图、节点 id 唯一、边端点存在、主流程上的类型都已注册（孤儿类型不查） | `UNKNOWN_NODE_TYPE` |
-| ② 拓扑 | **只看 start 可达的主流程**：start 唯一、至少一个可达 end、无环（Kahn）、注册的出入边约束（分流类节点 ≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
+| ② 拓扑 | **只看触发节点可达的主流程**：触发节点（`role="start"` 的消息 / 定时 / 事件触发）有且仅有 1 个、至少一个可达 end、无环（Kahn）、注册的出入边约束（分流类节点 ≥2 出边、end 无出边） | `START_NOT_UNIQUE` / `END_MISSING` / `CYCLE_DETECTED` 等 |
 | ③ 语义 | 注册字段必填、节点自注册校验器（trigger/cron、log level、http method）、**连线**（端口存在 / 两端同类 / 必填入口接上没）、表达式语法；**全部只查主流程节点** | `MISSING_CONFIG` / `INPUT_NOT_CONNECTED` / `UNKNOWN_PORT` / `PORT_TYPE_MISMATCH` / `DUPLICATE_INPUT_EDGE` / `INVALID_TRIGGER` / `INVALID_CRON` / `INVALID_LOG_LEVEL` / `INVALID_HTTP_METHOD` |
 | ④ Dry Run | **还没接**：只留了阶段名常量 `STAGE_DRY_RUN`，等执行引擎就位再加 | —— |
 
@@ -159,7 +159,7 @@ workflow_versions             每次保存一张不可变图快照
 |---|---|---|---|
 | `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `input_value`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— | —— |
 | `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— | —— |
-| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 —— **只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版），整图执行那一趟不碰调度器（它自己会排下一次） | — → `trigger` / `message` | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
+| `triggers.py` | **三个触发器**（都 `role="start"`，图起点）：`trigger-message` 等消息接入（登记到 `MessageRouter`）、`trigger-time` 按 cron 登记到调度器、`trigger-event` 订阅平台事件（加好友 / 进群 / 撤回 / 戳一戳…，登记到 `EventRouter`，按事件类型匹配）—— **加 / 摘触发只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版）。拆成三个类型而不是一个节点带下拉：形态本来就不一样（定时要 cron、事件要事件类型、消息什么都不配），拆开后卡片形状固定、面板不出现「跟当前触发方式无关的字段」 | `trigger-message`：— → `trigger` / `message` / `target`；`trigger-time`：— → `trigger`；`trigger-event`：— → `trigger` / `event_type` / `user_id` / `chat` / `chat_id` / `text` / `target` | `trigger-time`：`cron`（必填，自注册校验器）、`name`；`trigger-event`：`event_type`（可选项见 `EVENT_TYPE_OPTIONS`；**缺省 `*` = 任何事件** —— 没动过这个下拉也算配好了，别把它变成「必填没填」；下拉里按 `EVENT_TYPE_LABELS` 显示中文，值仍是平台原生事件名）；`trigger-message`：无 |
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | `trigger` → — | —— |
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | **调试**：把入口的值**回显**到日志（还附一份**全部入口值**的快照），再原样从出口送下去 —— 夹在中间看「线上流过了什么」；不改写、不判断，纯粹给画布联调用 | `trigger` / `message` → `trigger` / `message` | `message`（没接线时的手填值，缺省 `hello`） |
@@ -259,7 +259,7 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 
 - 入参：节点本身（`id` / `type` / `config`）+ 运行时上下文；
 - 返回：**本节点产出的值**（`dict`，**键 = 已声明的输出端口名**）。引擎按边把它投递给下游的
-  对应入口；多出来的键不会被投递（`start` 的 `scheduled` / `task_id` 就是这种「只给日志看」的
+  对应入口；多出来的键不会被投递（定时触发器的 `scheduled` / `task_id` 就是这种「只给日志看」的
   信息）。没有产出就返回 `{}`（像 `log` / `end` 那样）。
 - 执行是**串行**的（节点之间有数据依赖）；**要不要执行只看 `trigger` 入边**：数据边
   （`message` / `target`）只送值，不会把节点撑活；
@@ -273,10 +273,10 @@ NodeExecutor = Callable[[WorkflowNode, NodeExecutionContext], Awaitable[dict[str
 | 成员 | 是什么 | 用来干嘛 |
 |---|---|---|
 | `ctx.inputs` | `dict[str, Any]`，**引擎按入边投递进来的值**（键 = 目标端口名） | 用 `input_value(node, ctx, "名字")` 取；测试里直接 `ctx.inputs["x"] = ...` 预置。**上游没执行过的边不算数**（孤儿连出来的线不送值，`input_value` 回落到同名字段的手填值）；上游跑了但那个出口没产出才送空串 |
-| `ctx.trigger_data` | `dict[str, Any]`，消息触发时外面送进来的数据 | `start` 的 `message` 出口从它取（`ctx.trigger_data["message"]`） |
+| `ctx.trigger_data` | `dict[str, Any]`，触发时外面送进来的数据 | 消息触发器的 `message` 出口从它取（`ctx.trigger_data["message"]`）；事件触发器从它取 `event_type` / `user_id` / `chat` / `chat_id` / `text` |
 | `ctx.logger` | `BaseLogger` / `BoundLogger`（`tickneko.core.logger`） | 写业务日志（节点自己的运行痕迹）。**默认字段已提前绑好**：每条日志自动带 `workflow_id` / `owner_id` / `user_id`，节点只写自己那句话就认得出是哪条工作流、谁的、给谁跑的 |
 | `ctx.log` | `list[str]` | 节点产出的文字行（给前端回显 / 测试断言，不落日志文件） |
-| `ctx.scheduler` | `TaskManager \| None` | 要把流程挂到 cron 就用它（`start` 的 `trigger=time` 的做法）；没注入时是 `None` |
+| `ctx.scheduler` | `TaskManager \| None` | 要把流程挂到 cron 就用它（定时触发器的做法）；没注入时是 `None` |
 | `ctx.run_workflow()` | `async` 回调 | 触发整条流程（cron 到点时调它） |
 | `ctx.owner_id` | `str`：这条工作流属于谁（定义表里的归属） | `pack` 节点手动构造会话定位时带它（`gateway.make_target(platform, owner_id=...)`，握手时令牌定下，同一套 id 空间）；离线跑是空串 |
 | `ctx.user_id` | `str`：这一趟**面向哪个用户**（消息触发时是发消息那个人） | 把「同一个工作流在不同人身上的那一份」区分开（按人记状态 / 按人回复 / 按人打日志）。**和 `owner_id` 是两回事**：`owner_id` 是工作流的主人（账号），`user_id` 是被服务的对象。缺省空串（`NO_USER_ID`）—— 定时触发没有「这个人」；消息触发由消息路由（`dispatch`）带进来 |
@@ -336,6 +336,8 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 | 不可缺失字段 | `ConfigField("url", required=True)` | 主流程上的节点直接报 `MISSING_CONFIG`（`None` / 空串也算缺失） |
 | 默认值字段 | `ConfigField("level", default="INFO")` | 校验前先补默认值（自定义校验器看到的是补全后的 config）；保存版本时写进快照 |
 | 枚举字段 | `ConfigField("level", default="INFO", options=LOG_LEVEL_ORDER)` | 同上；`options` 只描述「有哪些可选值、按什么顺序显示」（画布渲染成下拉），校验仍归自定义校验器 |
+| 枚举显示名（下拉里显示中文） | `ConfigField("event_type", options=EVENT_TYPE_OPTIONS, option_labels=EVENT_TYPE_LABELS)` | `option_labels` 是「值 → 界面文字」：**值不改** —— 它可能要跟外部对上号（事件类型要跟平台上报的 `event_type` 全等匹配），中文只用来看着好懂；没配显示名的项直接显示值本身 |
+| 专用编辑器 | `ConfigField("cron", "cron 表达式", editor="cron")` | 这个字段用专用控件（`"cron"` → 可视化 cron 选择器）：画布**按标识挑控件、不认识节点类型** —— 加节点类型不用动前端；空串 = 通用渲染（有 `options` 就下拉、没有就输入框） |
 
 连线本身的规则（端口存不存在 `UNKNOWN_PORT`、两端同不同类 `PORT_TYPE_MISMATCH`、数据入口只接
 一条线 `DUPLICATE_INPUT_EDGE`）由校验器统一查，**不用自己写**。
@@ -359,7 +361,7 @@ async def exec_dingtalk(node, ctx): ...
 ```
 
 校验器收到的是**补完默认值**的节点，只负责返回 issue 列表（空列表 = 通过），
-错误码自定义（照 `http.py` 的 `INVALID_HTTP_METHOD`、`start.py` 的 `INVALID_CRON` 抄）。
+错误码自定义（照 `http.py` 的 `INVALID_HTTP_METHOD`、`triggers.py` 的 `INVALID_CRON` 抄）。
 
 **③ 拓扑角色与出入边约束也在注册处声明**：`role="start"|"end"|"normal"`、
 `min_outgoing` / `max_outgoing`、`expression_field`（指定哪个字段按表达式做语法检查）、
@@ -390,8 +392,13 @@ async def exec_dingtalk(node, ctx): ...
 显什么颜色；声明了 `tie` 的透传对两端**颜色永远一致** —— 对应关系就靠这层同色表达（端口
 圆点、连线、配置面板三处口径一致）。没接线 / 追不到具体类型的泛型端口保持灰。
 
-还有一处**固有例外**（形状本来就随 config 变，不是「前端另有定义」）：`start` 的端口与卡片上
-的字段条随 `config.trigger` 变（时间触发的图里不显示 `message` 出口）。
+**字段用哪个控件也全按字段声明挑**（`Inspector.tsx`）：`editor` 有专用编辑器（`"cron"` →
+可视化选择器）、`option_labels` 决定下拉里显示什么字、`options` 渲染成下拉、其余是输入框；
+config 里缺这个键时显示后端声明的默认值（界面上看到的就是实际生效的）。**画布不认识节点
+类型**——加节点类型、给某个字段换个控件，都只改后端。
+
+触发器拆成三个类型（`trigger-message` / `trigger-time` / `trigger-event`）之后，**没有「形状随
+config 变」的节点了** —— 卡片形状只由类型决定，前端不再需要任何特判。
 
 > 那份目录就是「两边对得上」的契约：面板上摆的必然是后端登记过的类型。万一旧图里还有认不出
 > 的类型，画布画成灰色未知节点，保存时被 `UNKNOWN_NODE_TYPE` 挡下 —— 以前那批只有声明没有
@@ -457,7 +464,7 @@ async def test_my_node_outputs(...) -> None:
 | 新的 HTTP 接口 | `tickneko/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 重试） | `executor.py`（串行 + 分支剪枝已就位；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
-| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流） |
+| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流；**事件触发走 `EventRouter`**，除归属外还按 `event_type` 匹配订阅） |
 | 给 `ctx` 注入新能力（如平台总线） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` 模块文档） |
 | 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `tickneko.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
 
@@ -499,9 +506,9 @@ async def test_my_node_outputs(...) -> None:
   **别的分支与流程其余部分照常跑**，不留堆栈。环境问题才中断整条：可预期的（连不上 / 超时）
   抛 `EnvironmentFailure`，失败日志只记一行（堆栈没有信息增量）；别的抛普通异常并留堆栈；
 - 同步执行（不并发），因为单条图的节点之间有数据依赖；并行执行留给将来；
-- 触发是**开始节点**自己的事（`start` 的 `config.trigger`）：`time` 时它把整张图登记到
-  `TaskManager`，由调度器按 cron 触发整条流程；`message`（缺省）被动等消息接入，发布 / 试跑时
-  只写一条开始日志；
+- 触发是**开始节点**自己的事（三个触发器各管一档）：`trigger-time` 把整张图登记到
+  `TaskManager`，由调度器按 cron 触发整条流程；`trigger-message` / `trigger-event` 分别登记到
+  `MessageRouter` / `EventRouter` 等着被派发；发布 / 试跑时只写一条开始日志；
 - 图的公共算法在 `graph.py`，与校验器共用同一份口径。本模块只再导出
   `SimpleWorkflowRunner` / `NodeExecutionContext` / `get_executor` 三个 —— 老代码
   `from tickneko.workflow.executor import ...` 还能用，新代码直接从 `tickneko.workflow` 取。
@@ -581,12 +588,13 @@ workflow_logger().info("工作流已登记", workflow_id=...)
 
 ### 8.2 运行时到底跑哪一份
 
-**已发布的那一份**（`published_version` 对应的图快照），两种触发都一样：
+**已发布的那一份**（`published_version` 对应的图快照），三种触发都一样：
 
-| 触发方式 | 登记发生在哪一趟 | 到点 / 来消息时跑什么 |
+| 触发方式 | 登记发生在哪一趟 | 到点 / 来消息 / 来事件时跑什么 |
 |---|---|---|
-| 时间触发（`start.config.trigger = time`） | 拨开开关 / 启动载入（`load_published_workflows`）/ 开着开关时发布新版 | 重新加载 `published_version` 的图，按 cron 跑**整条流程** |
-| 消息触发（缺省 `message`） | 同上（登记进 `MessageRouter`，键 = 归属 `owner_id`） | 同一份 `published_version`，消息进来时跑该归属下所有登记过的流 |
+| 定时触发（`trigger-time`） | 拨开开关 / 启动载入（`load_published_workflows`）/ 开着开关时发布新版 | 重新加载 `published_version` 的图，按 cron 跑**整条流程** |
+| 消息触发（`trigger-message`） | 同上（登记进 `MessageRouter`，键 = 归属 `owner_id`） | 同一份 `published_version`，消息进来时跑该归属下所有登记过的流 |
+| 事件触发（`trigger-event`） | 同上（登记进 `EventRouter`，键 = 归属 + 订阅的事件类型） | 同一份 `published_version`，来了**订阅的那种**事件才跑 |
 
 由此得到两条最常用的结论：
 

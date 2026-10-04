@@ -32,8 +32,8 @@
 """
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from tickneko.core.cache import cache as process_cache
@@ -118,7 +118,14 @@ class ConfigField:
       :func:`tickneko.workflow.validator.apply_config_defaults` 在保存版本时填默认值；
     * 两个都不给：纯可选字段，校验器不碰；
     * 给了 ``options``：这是**枚举**字段（画布渲染成下拉，顺序即显示顺序）。校验规则仍写在
-      节点自己的 validator 里，这里只描述「有哪些可选值」。
+      节点自己的 validator 里，这里只描述「有哪些可选值」；
+    * 给了 ``option_labels``：枚举项的**显示名**（值 -> 画布上显示的文字）。值本身不改 ——
+      它可能是写进图里要跟外部对上号的东西（事件类型要跟平台上报的 ``event_type`` 全等匹配、
+      日志级别要原样交给日志库），中文只用来「看着好懂」，不参与匹配；没配显示名的项直接
+      显示值本身；
+    * 给了 ``editor``：这个字段用**专用编辑器**（``"cron"`` -> 可视化 cron 选择器）。画布按
+      这个标识挑控件，**不认识节点类型** —— 加节点类型不用动前端；空串 = 通用渲染
+      （有 ``options`` 就下拉、没有就输入框）。
     """
 
     name: str
@@ -126,6 +133,8 @@ class ConfigField:
     required: bool = False
     default: Any = MISSING_DEFAULT
     options: tuple[str, ...] | None = None
+    option_labels: Mapping[str, str] = field(default_factory=dict[str, str])
+    editor: str = ""
 
 
 @dataclass(frozen=True)
@@ -263,13 +272,13 @@ class NodeExecutionContext:
         （``workflow_id`` / ``owner_id`` / ``user_id``）：节点只管写自己那句话，每条日志
         自己就认得出是哪条工作流、谁的、给谁跑的（见 :meth:`tickneko.core.logger.BaseLogger.
         bind`）。构造时注入的实例同样绑一份；只有不带 ``bind`` 的鸭子形状实例才原样用；
-    :param scheduler: 调度器（时间触发的 start 节点把流程图登记到这里）；
+    :param scheduler: 调度器（定时触发的节点把流程图登记到这里）；
     :param run: 触发整条流程的回调，cron 到点时调用；
     :param workflow_id: 这条图属于哪个工作流（时间触发登记任务时要它来保证任务名唯一，
-        见 :func:`tickneko.workflow.nodes.start.workflow_task_id`）；离线跑 / 测试直接构造
+        见 :func:`tickneko.workflow.nodes.triggers.workflow_task_id`）；离线跑 / 测试直接构造
         ctx 时是 :data:`NO_WORKFLOW_ID`；
     :param register_triggers: 本次是不是「登记触发」那一趟（拨运行开关 / 启动载入 / 发布新版
-        走的都是这一趟）：时间触发的 start 节点只有这时才去调度器加任务；整图执行（cron 到点
+        走的都是这一趟）：定时触发的节点只有这时才去调度器加任务；整图执行（cron 到点
         跑整条流程）是 ``False`` —— 任务在调度器里排着，它自己会排下一次；
     :param multi_instance: 这条工作流的**实例策略**（工作流设置里的「单实例 / 多实例」，来自
         定义表，与图无关）：``False``（缺省，单实例）上一次还没跑完就跳过本次；``True``（多实例）

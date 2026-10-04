@@ -108,7 +108,7 @@ python app.py -c path/to.toml     # 指定配置文件
 | `[onebot]` | `Settings.onebot` | 反向 WS 接入：监听地址、路径、令牌 |
 | `[kook]` | `Settings.kook` | 正向 WS 接入：连法调优 + 凭证加密密钥 |
 
-**没有 `[scheduler]`**：调度由工作流 `start` 节点按 cron 登记，不读这一层配置。
+**没有 `[scheduler]`**：调度由工作流的定时触发器（`trigger-time`）按 cron 登记，不读这一层配置。
 
 ### 2.2 数据库的三层逐项覆盖
 

@@ -99,6 +99,7 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             owner_id=conn.id,
             self_id=self_id,
             kind="notice",
+            event_type=event.notice_type,  # 平台原生类型（poke / group_increase / friend_recall …）
             chat="group" if has_group else "other",
             chat_id=str(event.group_id) if has_group else "",
             user_id=str(event.user_id) if event.user_id is not None else "",
@@ -124,6 +125,7 @@ def _translate(conn: OneBotConnection, event: OneBotEvent) -> PlatformEvent:
             owner_id=conn.id,
             self_id=self_id,
             kind="request",
+            event_type=event.request_type,  # 平台原生类型（friend / group）
             chat="group" if has_group else "private",
             chat_id=str(event.group_id) if has_group else "",
             user_id=str(event.user_id) if event.user_id is not None else "",

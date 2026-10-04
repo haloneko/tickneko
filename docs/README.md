@@ -107,7 +107,7 @@ db ──► core.logger 的模型        bots ──► 无 tickneko 依赖
 
 - **读 TOML 的只有根目录 `config.py` 与 `app.py`**（不在 `tickneko` 包内）；`tickneko` 包内**没有任何模块读配置文件** —— 一律由上层用 `from_mapping(映射)` 注入（`ApiOptions` / `OneBotOptions` / `KookOptions` / `CacheOptions`）；
 - **配置位置**：`data/config.toml`（模板 `config.toml.example`）—— 跟 sqlite / Kook 密钥 / 头像同住 `data/`，备份 / 搬迁 / 容器挂载只搬一个目录；容器里首次启动会照模板生成；
-- 配置区域（`config.toml.example`）：`[app]`、`[database]`、`[logging]`（含 `[logging.file]` / `[logging.database]` / `[logging.queue]`）、`[cache]`（含 `[cache.redis]`）、`[api]`、`[onebot]`、`[kook]`；没有 `[scheduler]` —— 调度由工作流的 `start` 节点按 cron 登记；
+- 配置区域（`config.toml.example`）：`[app]`、`[database]`、`[logging]`（含 `[logging.file]` / `[logging.database]` / `[logging.queue]`）、`[cache]`（含 `[cache.redis]`）、`[api]`、`[onebot]`、`[kook]`；没有 `[scheduler]` —— 调度由工作流的定时触发器（`trigger-time`）按 cron 登记；
 - 容错口径：文件不存在 / 缺项按默认值补齐，只有**值写错**才抛 `ConfigError`；废弃键直接报错而不是静默忽略。
 - `app.py` 的启动顺序（为什么先建日志核心、数据库探测、停机收尾）与配置的细节见 [app/app.md](app/app.md)。
 

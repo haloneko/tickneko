@@ -41,6 +41,11 @@ class PlatformEvent:
     self_id: str = ""
     #: 事件大类
     kind: EventKind = "meta"
+    #: **平台原生事件类型名**（通知 / 请求才有，消息与元事件是空串）：OneBot 是
+    #: ``notice_type`` / ``request_type``（如 ``poke`` / ``friend`` / ``group_increase``）。
+    #: 事件触发（``start`` 的 ``trigger=event``）按它匹配「这张图订阅了哪种事件」，
+    #: 免得工作流去下探 ``raw`` 认事件。
+    event_type: str = ""
     #: 会话指向：群还是私聊；没有明确会话的事件（纯通知）是 ``"other"``
     chat: ChatKind = "other"
     #: 会话标识：群号（群聊）或对方账号（私聊）；没有是空串

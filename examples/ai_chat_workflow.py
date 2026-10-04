@@ -28,7 +28,7 @@ def build_graph(endpoint: str, token_env: str = "AI_SERVICE_TOKEN", ignored_user
     def edge(source: str, target: str, source_port: str = "trigger", target_port: str = "trigger") -> None:
         edges.append(dict(source=source, target=target, source_port=source_port, target_port=target_port))
 
-    node("start", "start", 0, 200, trigger="message")
+    node("start", "trigger-message", 0, 200)
     node("end", "end", 1200, 200)
     previous, previous_port = "start", "trigger"
     if ignored_users:

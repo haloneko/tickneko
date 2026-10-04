@@ -95,6 +95,12 @@ class NodeFieldData(_Frozen):
     has_default: bool
     default: Any = None
     options: list[str] | None = None
+    #: 枚举项的**显示名**（值 -> 画布上显示的文字）：值仍是 ``options`` 里那个（它可能要跟
+    #: 外部对上号，别改），中文只用来看着好懂 —— 没配的项前端直接显示值本身
+    option_labels: dict[str, str] | None = None
+    #: **专用编辑器**标识（``"cron"`` = 可视化 cron 选择器）；空串 = 通用渲染（下拉 / 输入框）。
+    #: 画布按标识挑控件，不认识节点类型 —— 加节点类型不用动前端
+    editor: str = ""
 
     @classmethod
     def from_field(cls, field: ConfigField) -> NodeFieldData:
@@ -106,6 +112,8 @@ class NodeFieldData(_Frozen):
             has_default=has_default,
             default=field.default if has_default else None,
             options=list(field.options) if field.options else None,
+            option_labels=dict(field.option_labels) or None,
+            editor=field.editor,
         )
 
 

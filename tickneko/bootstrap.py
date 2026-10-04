@@ -43,6 +43,7 @@ from .platforms.onebot import OneBotOptions
 from .wiring import wire_loggers
 from .workflow import SqlWorkflowStore
 from .workflow.runtime import (
+    EventRouter,
     MessageRouter,
     WorkflowTriggers,
     load_published_workflows,
@@ -63,6 +64,8 @@ _onebot_adapter: OneBotAdapter | None = None
 _kook_adapter: KookAdapter | None = None
 #: 消息路由（trigger=message 工作流的登记处 / 消息分发处）；载入时一并登记
 _message_router: MessageRouter | None = None
+#: 事件路由（trigger=event 工作流的登记处 / 事件分发处）；载入时一并登记
+_event_router: EventRouter | None = None
 
 
 class _NoSignalServer(uvicorn.Server):
@@ -118,18 +121,19 @@ async def on_platform_event(event: PlatformEvent) -> None:
     拆成普通数据」这一步就发生在这里，消息路由本身不 import bridge，依赖方向不破。
     """
     log = default_core().child("bridge")
-    if event.kind != "message":
-        # 系统事件 / 通知：静默 —— 不进消息路由（不触发 trigger=message 工作流），
-        # 只留 debug 痕迹，不刷 INFO 日志
+    if event.kind == "meta":
+        # 连接生命周期 / 心跳一类：与业务无关，静默（只留 debug，不刷 INFO）
         log.debug(
-            "收到非消息事件",
+            "收到元事件",
             platform=event.platform,
             owner_id=event.owner_id,
             kind=event.kind,
-            chat=event.chat,
-            chat_id=event.chat_id,
-            user_id=event.user_id,
         )
+        return
+    if event.kind != "message":
+        # 通知 / 请求（加好友、进群、撤回、戳一戳…）：交给**事件路由**，
+        # 触发订阅了这种事件的 trigger=event 工作流；没订阅就没人跑（路由内部按类型匹配）。
+        await _dispatch_event(event)
         return
     log.info(
         "收到事件",
@@ -163,6 +167,46 @@ async def on_platform_event(event: PlatformEvent) -> None:
         log.exception("消息事件分发失败", platform=event.platform, owner_id=event.owner_id)
 
 
+async def _dispatch_event(event: PlatformEvent) -> None:
+    """通知 / 请求类事件 -> 事件路由（``trigger=event`` 的工作流按订阅的类型匹配）。
+
+    同样只认普通数据：事件类型 / 谁 / 哪个会话 / 带的文本 / 会话定位一并交出去，
+    路由与工作流都不 import bridge（依赖方向同消息那条路）。
+    """
+    log = default_core().child("bridge")
+    if not event.event_type:
+        # 没有事件类型的事件（如 Kook 的系统消息）：订阅不了、也无从匹配，
+        # 静默丢掉 —— 别让「订阅任何事件（*）」的图被这种东西拉起来
+        log.debug("收到没有事件类型的事件，已忽略", platform=event.platform, kind=event.kind)
+        return
+    router = _event_router
+    if router is None:
+        return  # 装配还没走到建事件路由（或没配事件触发）—— 防御性放过
+    try:
+        await router.dispatch(
+            event.owner_id,
+            trigger_data={
+                "event_type": event.event_type,
+                "user_id": event.user_id,
+                "platform": event.platform,
+                "self_id": event.self_id,
+                "chat": event.chat,
+                "chat_id": event.chat_id,
+                "text": event.text,
+                "message_id": event.message_id,
+                "target": event.target,
+            },
+        )
+    except Exception:  # noqa: BLE001 — 事件入口尽力而为，别让一条坏事件拖垮整条链路
+        log.exception(
+            "平台事件分发失败",
+            platform=event.platform,
+            owner_id=event.owner_id,
+            kind=event.kind,
+            event_type=event.event_type,
+        )
+
+
 # --------------------------------------------------------------------------- 装配
 async def run(
     *,
@@ -187,7 +231,7 @@ async def run(
     :param cache_config: ``[cache]`` 那块配置，交给 ``CacheOptions.from_mapping``。
     """
     global _api_server, _api_task, _db_engine, _gateway, _onebot_adapter, _kook_adapter
-    global _message_router
+    global _message_router, _event_router
     _db_engine = engine
     log = default_core().child("bootstrap")
     # 把核心派发给各业务模块（workflow / scheduler / cache / bridge 的日志槽位）：之后它们
@@ -253,20 +297,26 @@ async def run(
         secret_key=secret_key,
     )
 
+    def _run_flow(workflow_id: str, version: int, **kw: object):
+        """「跑整条流程」的回调：消息 / 事件两条路由共用一份（闭包带上 store / scheduler / gateway）。
+
+        两条路由都只认普通数据，跑到整条流程时才需要这些依赖 —— 消息触发与事件触发跑整条
+        流程那一趟都要能拿得到它们发动作。
+        """
+        return run_published_workflow(
+            workflow_id, version, workflows, scheduler, gateway=_gateway, **kw
+        )
+
     # 消息路由：trigger=message 工作流的登记处 + 消息分发处。它不 import bridge，只认普通
     # 数据；「跑整条流程」的回调在这里把 run_published_workflow 连同 store / scheduler 闭包
     # 进来（消息触发跑整条流程那一趟也要能拿得到它们发动作）。
     _message_router = MessageRouter()
-    _message_router.attach(
-        lambda workflow_id, version, **kw: run_published_workflow(
-            workflow_id,
-            version,
-            workflows,
-            scheduler,
-            gateway=_gateway,
-            **kw,
-        )
-    )
+    _message_router.attach(_run_flow)
+
+    # 事件路由：trigger=event 工作流的登记处 + 事件（通知 / 请求）分发处。与消息路由同一副
+    # 形状（不 import bridge、只认普通数据），区别只在「按订阅的事件类型匹配」。
+    _event_router = EventRouter()
+    _event_router.attach(_run_flow)
 
     _gateway.subscribe(on_platform_event)
 
@@ -290,6 +340,7 @@ async def run(
                     scheduler,
                     gateway=_gateway,
                     message_router=_message_router,
+                    event_router=_event_router,
                 ),
                 workflow_store=workflows,
             ),
@@ -312,6 +363,7 @@ async def run(
         scheduler,
         gateway=_gateway,
         message_router=_message_router,
+        event_router=_event_router,
     )
 
 
