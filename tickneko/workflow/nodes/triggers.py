@@ -180,7 +180,9 @@ async def exec_trigger_message(node: WorkflowNode, ctx: NodeExecutionContext) ->
     category="trigger",
     outputs=[TRIGGER_PORT],
     fields=[
-        ConfigField("cron", "cron 表达式"),
+        # 手填 5 段表达式容易写错：声明 editor="cron"，画布换成可视化选择器（前端只认标识、
+        # 按字段挑控件，不认识节点类型）
+        ConfigField("cron", "cron 表达式", editor="cron"),
         ConfigField("name", "调度任务名"),
     ],
     validator=validate_time_cron,
@@ -290,10 +292,13 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
         PortSpec("target", "target", "会话定位"),
     ],
     fields=[
-        # 值是平台原生事件名（要跟上报的 event_type 全等匹配），下拉里显示中文（option_labels）
+        # 值是平台原生事件名（要跟上报的 event_type 全等匹配），下拉里显示中文（option_labels）。
+        # 默认 `*`（任何事件）：新建的节点 config 里就带上它，别让「没动过这个下拉」变成
+        # 「必填项没填」——默认值在校验前由 apply_config_defaults 补齐（缺键 / None 都补）
         ConfigField(
             "event_type",
             "事件类型",
+            default="*",
             options=EVENT_TYPE_OPTIONS,
             option_labels=EVENT_TYPE_LABELS,
         ),

@@ -1,14 +1,14 @@
 /**
  * 配置面板（悬浮在画布右侧）：选中节点的端口信息与配置字段 + 校验报告 + 版本历史。
  *
- * 字段清单来自后端目录：有 ``options`` 的渲染成下拉，其余是输入框；与数据入口**同名**的
- * 字段照常可填 —— 那是「没接线时的手填兜底」，标签上写明当前这个值是线上来的还是手填的。
- * 后端没声明、但 config 里确实存在的键也照旧给个输入框，别让它在界面上消失。
+ * **控件全按后端声明挑**（见 ``NodeFieldSpec``）：``editor`` 有专用编辑器（cron -> 可视化选择
+ * 器），``options`` 渲染成下拉，其余是输入框 —— 这里不认识任何节点类型，加节点类型不用动它。
+ * 与数据入口**同名**的字段照常可填 —— 那是「没接线时的手填兜底」，标签上写明当前这个值是
+ * 线上来的还是手填的。后端没声明、但 config 里确实存在的键也照旧给个输入框，别让它消失。
  */
 import { IconTrash } from '../../../common/icons'
 import { CronPicker } from '../../../common/CronPicker'
 import {
-  hasDedicatedEditor,
   isDataPort,
   portColor,
   portEffKey,
@@ -100,35 +100,36 @@ export function Inspector({
             <label className={styles.label}>节点 ID</label>
             <input className={styles.input} value={node.id} disabled />
           </div>
-          {/* cron：定时触发器的专属字段，走可视化选择器（手填表达式太容易写错） */}
-          {node.type === 'trigger-time' && (
-            <div className={styles.field}>
-              <label className={styles.label}>cron 表达式</label>
-              <CronPicker
-                // 换节点就换一个新的（组件内部记着「用户选了哪个模式」，不该带到别的节点上）
-                key={node.id}
-                value={String(node.config.cron ?? '')}
-                onChange={(cron) => onUpdate(node.id, 'cron', cron)}
-              />
-            </div>
-          )}
           {def.fields
-            .filter((field) => !hasDedicatedEditor(node.type, field.name))
             .map((field) => {
               const asInput = def.inputs.find((p) => p.id === field.name && p.type === 'message')
               const fromWire = asInput !== undefined && wired.has(field.name)
+              // 当前值：config 里没有（缺失 / null）就退回后端声明的默认值 —— 界面上显示的就是
+              // 实际生效的那个（后端校验 / 保存前会补默认值），别出现「显示没选、实际按默认跑」
+              const fallback = field.has_default && field.default !== null ? field.default : ''
+              const current = String(node.config[field.name] ?? fallback)
               return (
                 <div className={styles.field} key={field.name}>
                   <label className={styles.label}>
                     {field.label}
                     {asInput && (fromWire ? '（来自连线，已覆盖）' : '（没接线时手填）')}
                   </label>
-                  {field.options ? (
+                  {field.editor === 'cron' ? (
+                    <CronPicker
+                      // 换节点就换一个新的（组件内部记着「用户选了哪个模式」，不该带到别的节点上）
+                      key={node.id}
+                      value={current}
+                      onChange={(cron) => onUpdate(node.id, field.name, cron)}
+                    />
+                  ) : field.options ? (
                     <select
                       className={styles.input}
-                      value={String(node.config[field.name] ?? '')}
+                      value={current}
                       onChange={(e) => onUpdate(node.id, field.name, e.target.value)}
                     >
+                      {/* 当前值不在可选清单里（还没选过 / 图里塞了别的值）：补一个「未选择」项。
+                          没它的话下拉会停在第一项上 —— 看着像「已经选好了」，实际 config 里是空的 */}
+                      {!field.options.includes(current) && <option value="">（未选择）</option>}
                       {field.options.map((option) => (
                         <option key={option} value={option}>
                           {/* 显示名来自后端（option_labels）：值是「跟外部对上号」的那个，不改 */}
@@ -139,7 +140,7 @@ export function Inspector({
                   ) : (
                     <input
                       className={styles.input}
-                      value={String(node.config[field.name] ?? '')}
+                      value={current}
                       onChange={(e) => onUpdate(node.id, field.name, e.target.value)}
                     />
                   )}
@@ -148,11 +149,7 @@ export function Inspector({
             })}
           {/* 后端没声明的键（手写图 / 扩展塞进来的）：照旧给个输入框 */}
           {Object.keys(node.config)
-            .filter(
-              (key) =>
-                !hasDedicatedEditor(node.type, key) &&
-                !def.fields.some((f) => f.name === key),
-            )
+            .filter((key) => !def.fields.some((f) => f.name === key))
             .map((key) => (
               <div className={styles.field} key={`extra-${key}`}>
                 <label className={styles.label}>{key}</label>

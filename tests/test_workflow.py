@@ -2744,6 +2744,9 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
     time_trigger = get_spec("trigger-time")
     assert time_trigger is not None
     assert [f.name for f in time_trigger.fields] == ["cron", "name"]
+    # 专用编辑器由字段自己声明（cron -> 可视化选择器）：前端按标识挑控件，不认识节点类型
+    assert time_trigger.fields[0].editor == "cron"
+    assert time_trigger.fields[1].editor == ""
 
     event_trigger = get_spec("trigger-event")
     assert event_trigger is not None
@@ -3420,6 +3423,14 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert set(event_field["option_labels"]) == set(event_field["options"])
     assert event_field["option_labels"]["friend"] == "加好友请求"
     assert "*" in event_field["options"]  # 值仍是通配符那个写法
+    assert event_field["default"] == "*"  # 缺省「任何事件」：没动过这个下拉也算配好了
+
+    # 专用编辑器也由后端声明：画布只认这个标识、按字段挑控件，不认识节点类型
+    # （cron 走可视化选择器；其余字段没有专用编辑器，通用渲染）
+    cron_field = next(f for f in nodes["trigger-time"]["fields"] if f["name"] == "cron")
+    assert cron_field["editor"] == "cron"
+    assert cron_field["options"] is None  # 有专用编辑器就不走「下拉」那条路
+    assert method["editor"] == "" and event_field["editor"] == ""
 
     # 透传对：placeholder 的泛型入口 / 出口用 tie 互相指认（指向同一节点另一侧的端口 id）——
     # 画布据此让输入输出显示同一种类型（两端同色表示对应）
@@ -4857,6 +4868,34 @@ def test_trigger_validators_check_their_own_config() -> None:
     message = WorkflowNode(id="m", type="trigger-message", config={})
     assert get_spec("trigger-message") is not None and get_spec("trigger-message").validator is None
     assert message.config == {}
+
+
+def test_event_trigger_defaults_to_any_event() -> None:
+    """``event_type`` 有默认值 ``*``（任何事件）：没配过这张图也能过校验。
+
+    画布上的坑在于「config 里还没这个键时下拉停在第一项，看着像已经选了任何事件、其实值是空的」
+    （前端另补了「未选择」占位项）；后端这份默认值保证「没动过就不算缺必填」。
+    """
+    from tickneko.workflow import get_spec
+
+    spec = get_spec("trigger-event")
+    assert spec is not None
+    field = spec.fields[0]
+    assert field.name == "event_type" and field.default == "*"
+
+    # 缺这个键的图照样过：默认值在校验前由 apply_config_defaults 补齐
+    graph = {
+        "nodes": [node("s", "trigger-event"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    assert validate_graph(graph).valid
+
+    # 显式填了具体事件也照常过（默认值不覆盖用户填的值）
+    picked = {
+        "nodes": [node("s", "trigger-event", event_type="friend"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    assert validate_graph(picked).valid
 
 
 @pytest.mark.asyncio

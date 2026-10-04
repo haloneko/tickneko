@@ -122,7 +122,10 @@ class ConfigField:
     * 给了 ``option_labels``：枚举项的**显示名**（值 -> 画布上显示的文字）。值本身不改 ——
       它可能是写进图里要跟外部对上号的东西（事件类型要跟平台上报的 ``event_type`` 全等匹配、
       日志级别要原样交给日志库），中文只用来「看着好懂」，不参与匹配；没配显示名的项直接
-      显示值本身。
+      显示值本身；
+    * 给了 ``editor``：这个字段用**专用编辑器**（``"cron"`` -> 可视化 cron 选择器）。画布按
+      这个标识挑控件，**不认识节点类型** —— 加节点类型不用动前端；空串 = 通用渲染
+      （有 ``options`` 就下拉、没有就输入框）。
     """
 
     name: str
@@ -131,6 +134,7 @@ class ConfigField:
     default: Any = MISSING_DEFAULT
     options: tuple[str, ...] | None = None
     option_labels: Mapping[str, str] = field(default_factory=dict[str, str])
+    editor: str = ""
 
 
 @dataclass(frozen=True)

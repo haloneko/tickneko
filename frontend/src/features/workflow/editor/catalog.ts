@@ -315,16 +315,6 @@ function computeNodeDef(type: string): NodeTypeDef {
   return base
 }
 
-/**
- * 哪些字段**有专门的编辑器**，通用渲染要跳过（不然会出现两个控件）。
- *
- * 目前只有定时触发器的 ``cron``：走 :mod:`common/CronPicker` 可视化选择 ——
- * 手填表达式太容易写错。
- */
-export function hasDedicatedEditor(nodeType: string, fieldName: string): boolean {
-  return nodeType === 'trigger-time' && fieldName === 'cron'
-}
-
 // --------------------------------------------------------------------------- 几何
 export function nodeHeight(def: NodeTypeDef): number {
   const portRows = Math.max(def.inputs.length, def.outputs.length)
