@@ -72,3 +72,66 @@ def test_regular_workflow_without_ai_node_never_calls_ai(monkeypatch):
     asyncio.run(SimpleWorkflowRunner().run(graph, ctx))
     assert sent == ["普通工作流"]
     assert calls == []
+
+
+@pytest.mark.parametrize("chat", ["private", "group"])
+def test_other_users_service_replies_through_their_own_target(monkeypatch, chat):
+    calls = http_stub(monkeypatch, status=200, body={"message": "自己的 AI 正文", "target": "不能让服务改发给别人"})
+    sent = []
+
+    class Gateway:
+        async def reply(self, target, content):
+            sent.append((target, content))
+            return SimpleNamespace(ok=True, data={}, message="")
+
+    targets = []
+    for owner in ("alice", "bob"):
+        endpoint = f"http://{owner}.localhost/ai"
+        token_env = f"{owner.upper()}_SERVICE_TOKEN"
+        monkeypatch.setenv(token_env, f"{owner}-test-only")
+        graph = WorkflowGraph.model_validate(build_graph(endpoint, token_env, response_mode="return-message"))
+        assert validate_graph(graph).valid
+        target = SimpleNamespace(platform="onebot", owner_id=owner, chat=chat, user_id=456, group_id=123)
+        targets.append(target)
+        ctx = NodeExecutionContext(gateway=Gateway(), owner_id=owner)
+        ctx.trigger_data = dict(platform="onebot", chat=chat, chat_id="123", user_id="456", message_id="789", message="你好", target=target)
+        asyncio.run(SimpleWorkflowRunner().run(graph, ctx))
+
+    assert sent == [(targets[0], "自己的 AI 正文"), (targets[1], "自己的 AI 正文")]
+    assert sent[0][0] is targets[0] and sent[1][0] is targets[1]
+    assert [call["url"] for call in calls] == ["http://alice.localhost/ai", "http://bob.localhost/ai"]
+    assert [call["headers"]["Authorization"] for call in calls] == ["Bearer alice-test-only", "Bearer bob-test-only"]
+
+
+@pytest.mark.parametrize("message", ["awa", "bot ping"])
+def test_reply_preset_local_branch_needs_no_ai_credentials(monkeypatch, message):
+    calls = http_stub(monkeypatch, status=200, body={"message": "不该调用"})
+    monkeypatch.delenv("AI_SERVICE_TOKEN")
+    graph = WorkflowGraph.model_validate(build_graph("http://others.localhost/ai", response_mode="return-message"))
+    sent = []
+    class Gateway:
+        async def reply(self, target, content):
+            sent.append(content)
+            return SimpleNamespace(ok=True, data={}, message="")
+    ctx = NodeExecutionContext(gateway=Gateway())
+    ctx.trigger_data = dict(message=message, target=object())
+    asyncio.run(SimpleWorkflowRunner().run(graph, ctx))
+    assert len(sent) == 1 and not calls
+
+
+def test_reply_service_empty_body_stops_send_branch(monkeypatch):
+    calls = http_stub(monkeypatch, status=200, body={"accepted": True})
+    graph = WorkflowGraph.model_validate(build_graph("http://others.localhost/ai", response_mode="return-message"))
+    class Gateway:
+        async def reply(self, *args):
+            pytest.fail("空正文不应该触发下游发送")
+    ctx = NodeExecutionContext(gateway=Gateway())
+    ctx.trigger_data = dict(platform="onebot", chat="private", chat_id="456", user_id="456", message_id="789", message="你好", target=object())
+    asyncio.run(SimpleWorkflowRunner().run(graph, ctx))
+    assert len(calls) == 1
+    assert any("[skip]" in entry and "send_ai" in entry for entry in ctx.log)
+
+
+def test_preset_rejects_unknown_reply_mode():
+    with pytest.raises(ValueError, match="回复方式"):
+        build_graph("http://localhost/ai", response_mode="unknown")

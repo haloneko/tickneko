@@ -28,7 +28,7 @@ def http_stub(monkeypatch, status=202, body=None, failure=None):
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
         async def post(self, url, **kwargs):
-            calls.append(kwargs)
+            calls.append({"url": url, **kwargs})
             if failure: raise failure
             return httpx.Response(status, json={"accepted": True} if body is None else body)
     monkeypatch.setenv("AI_SERVICE_TOKEN", "local-test-only")
@@ -96,3 +96,30 @@ def test_no_credentials_means_zero_requests_and_no_private_fallback(monkeypatch)
     monkeypatch.setattr("tickneko.workflow.nodes.ai_service._import_httpx", forbidden_http)
     with pytest.raises(RuntimeError, match="本次未发送 AI 请求"):
         asyncio.run(exec_ai_service(node(), context()))
+
+
+def test_return_message_is_data_only_and_does_not_send(monkeypatch):
+    calls = http_stub(monkeypatch, status=200, body={"message": "你好，这是我的服务。", "target": "其他机器人"})
+    ctx = context()
+    ctx.gateway = SimpleNamespace(reply=lambda *args: pytest.fail("AI 节点不能自己发送"))
+    result = asyncio.run(exec_ai_service(node(response_mode="return-message"), ctx))
+    assert result == {"accepted": True, "message": "你好，这是我的服务。"}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("body", [{"accepted": True}, {"message": " "}, {"message": None}, {"message": 123}, [], {"accepted": False, "message": "未处理"}])
+def test_return_message_requires_real_body(monkeypatch, body):
+    http_stub(monkeypatch, status=200, body=body)
+    with pytest.raises(NodeFailure):
+        asyncio.run(exec_ai_service(node(response_mode="return-message"), context()))
+
+
+@pytest.mark.parametrize("mode,timeout,valid", [("service-sends", 60, True), ("service-sends", 61, False), ("return-message", 300, True), ("return-message", 301, False), ("unknown", 15, False)])
+def test_reply_modes_and_timeout_validation(mode, timeout, valid):
+    assert bool(validate_ai_service(node(response_mode=mode, timeout=timeout))) is not valid
+
+
+def test_unconfigured_reply_mode_never_uses_network(monkeypatch):
+    monkeypatch.setattr("tickneko.workflow.nodes.ai_service._import_httpx", lambda: pytest.fail("非法模式不能联网"))
+    with pytest.raises(ValueError, match="AI 回复方式"):
+        asyncio.run(exec_ai_service(node(response_mode="unknown"), context()))
