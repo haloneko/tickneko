@@ -19,9 +19,9 @@
  * * ``editor/Palette.tsx``         节点面板
  * * ``editor/Inspector.tsx``       配置面板 + 校验报告 + 版本历史
  * * ``editor/Toolbar.tsx``         顶部工具栏
- * * ``editor/ContextMenu.tsx``     节点右键菜单（删除）
- * * ``editor/CanvasMenu.tsx``      空白处右键菜单（分类 + 二级菜单添加节点）
- * * ``editor/ContextMenuHost.tsx`` 右键菜单的唯一出口：按状态画其中一份
+ * * ``editor/menu.tsx``            右键菜单配置表：有什么按钮、什么状态显示什么、点了做什么
+ * * ``editor/ContextMenuList.tsx`` 右键菜单渲染器（不认识具体按钮，只看配置）
+ * * ``editor/ContextMenuHost.tsx`` 右键菜单的唯一出口：采集状态 + 选配置表
  * * ``editor/useContextMenu.ts``   菜单状态 + 点别处 / Esc 关闭
  * * ``editor/useCanvasPan.ts``     右键拖动平移（顺带记「点了一下还是拖了一下」）
  * * ``editor/useWorkflowDoc.ts``    暂存 / 校验 / 提交版本 / 发布 / 运行开关（后端那一半）
@@ -1170,32 +1170,25 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         )}
       </div>
 
-      {/* 右键菜单（节点删除 / 空白添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
+      {/*
+        右键菜单：内容与「什么状态显示什么」都在 editor/menu.tsx 的配置表里，这里只把动作的实现
+        和采集到的状态递进去（点完任一项由渲染器统一收菜单）。
+      */}
       <ContextMenuHost
         state={menuState}
         menuRef={menuRef}
         catalog={palette}
         canPaste={hasClipboard}
-        onCutNodes={(ids) => {
-          cutNodes(ids)
-          closeMenu()
+        actions={{
+          cut: cutNodes,
+          copy: copyNodes,
+          paste: (at) => {
+            void pasteAt(at)
+          },
+          remove: deleteNodesByIds,
+          add: addNode,
         }}
-        onCopyNodes={(ids) => {
-          copyNodes(ids)
-          closeMenu()
-        }}
-        onPasteAt={(at) => {
-          void pasteAt(at)
-          closeMenu()
-        }}
-        onDeleteNodes={(ids) => {
-          deleteNodesByIds(ids)
-          closeMenu()
-        }}
-        onAddNode={(type, at) => {
-          addNode(type, at)
-          closeMenu()
-        }}
+        onClose={closeMenu}
       />
     </div>
   )

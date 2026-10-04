@@ -4,8 +4,8 @@
  * 这里只管三件事：记住当前开的是哪一份、点别处（或 Esc）关掉它、把菜单根节点的 ref 递出去
  * （document 上那一下 mousedown 靠它区分「点菜单里」与「点别处」）。
  *
- * 「菜单长什么样」「点完做什么」不在这里：前者归 ContextMenu / CanvasMenu，后者由调用方接。
- * 打开一份新菜单 = 覆盖旧状态，不用先手动关另一份。
+ * 「菜单长什么样」「什么状态显示什么」「点完做什么」都不在这里：前者归 menu.tsx 的配置表，
+ * 画出来归 ContextMenuList。打开一份新菜单 = 覆盖旧状态，不用先手动关另一份。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Point } from './catalog'
