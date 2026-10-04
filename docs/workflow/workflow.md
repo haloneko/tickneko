@@ -27,6 +27,7 @@ tickneko/workflow/
 │   ├── test.py          内置：test（调试：回显入口的值到日志，画布联调用）
 │   ├── constant.py      内置：constant（一个节点一个常量值，从 value 出口送下去）
 │   ├── http.py          内置：http（发一次 HTTP 请求；需要可选依赖 httpx）
+│   ├── ai_service.py    内置：ai-service（将选中分支的消息投递到 AI 服务，凭据取环境变量；见 ai-service.md）
 │   ├── delay.py         内置：delay（异步等待：秒数可接线覆盖手填，不阻塞事件循环）
 │   ├── json.py          内置：json（解析 JSON 文本 + 点路径取值；取不到 = 业务失败，停止向下传播）
 │   ├── regex.py         内置：regex（正则提取 / 替换；抽不到 = 业务失败，停止向下传播）
