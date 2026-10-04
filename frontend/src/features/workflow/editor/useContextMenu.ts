@@ -10,9 +10,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Point } from './catalog'
 
-/** 当前打开的右键菜单：节点上（删除这几个节点）或空白处（在这一点添加节点） */
+/**
+ * 当前打开的右键菜单：节点上（复制 / 粘贴 / 删除）或空白处（粘贴 / 添加节点）。
+ *
+ * ``point`` 是右键那一处的**画布坐标**，两份菜单都要用它：空白菜单拿它当新节点的落点，
+ * 「粘贴」拿它当整组副本的中心。
+ */
 export type MenuState =
-  | { kind: 'node'; x: number; y: number; ids: string[] }
+  | { kind: 'node'; x: number; y: number; ids: string[]; point: Point }
   | { kind: 'canvas'; x: number; y: number; point: Point }
 
 export interface ContextMenuApi {

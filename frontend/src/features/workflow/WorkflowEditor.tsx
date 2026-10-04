@@ -86,6 +86,22 @@ import styles from './WorkflowEditor.module.css'
 /** 没有接线信息时的空集合：身份固定，别让 memo 化的卡片每次拿到一个新 Set */
 const NO_WIRED: Set<string> = new Set()
 
+/**
+ * 「待放置的一组节点」：两种贴法共用这份几何 —— Ctrl+V 先拿它当虚影（跟鼠标走），
+ * 右键「粘贴」直接拿它落子。
+ *
+ * ``x``/``y`` = 组中心当前对准的画布坐标；``cx``/``cy`` = 组中心在这组快照坐标里的位置，
+ * 两者之差就是整组要平移的偏移。
+ */
+interface Placing {
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+  cx: number
+  cy: number
+  x: number
+  y: number
+}
+
 interface WorkflowEditorProps {
   workflowId: string
   onClose: () => void
@@ -107,16 +123,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const { state: menuState, ref: menuRef, open: openMenuAt, close: closeMenu } = useContextMenu()
   /**
    * 粘贴虚影（Ctrl+V 放置模式）：剪贴板内容先以半透明预览跟鼠标走，左键落子才真正放图。
-   * x/y = 虚影组中心当前所在画布坐标；cx/cy = 组中心在剪贴板坐标里的位置。
+   * 右键菜单的「粘贴」不走这一步 —— 鼠标已经指名了落点，一步到位（见 ``pasteAt``）。
    */
-  const [placing, setPlacing] = useState<{
-    nodes: WorkflowNode[]
-    edges: WorkflowEdge[]
-    cx: number
-    cy: number
-    x: number
-    y: number
-  } | null>(null)
+  const [placing, setPlacing] = useState<Placing | null>(null)
   /** 节点库拖出的新节点虚影：x/y = 鼠标的画布坐标（null = 没拖 / 不在画布上） */
   const [newDrag, setNewDrag] = useState<{ type: string; x: number; y: number } | null>(null)
   /**
@@ -467,6 +476,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       e.preventDefault()
       e.stopPropagation() // 节点上的右键不再冒泡到画布，免得又弹一份空白菜单
       if (panDragged()) return // 这一发右键是拖动平移收尾，不弹菜单
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      // 右键那一处的画布坐标：空白菜单拿它当新节点落点，「粘贴」拿它当整组副本的中心
+      const point = toCanvas(e.clientX, e.clientY, rect)
 
       if (nodeId) {
         // 点在框选集合内 = 对整组操作；集合外 = 先让它成为当前选择（只它一个）
@@ -474,21 +487,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         const ids = current.has(nodeId) ? [...current] : [nodeId]
         setSelectedId(nodeId)
         if (!current.has(nodeId) && current.size > 0) setSelectedIds(new Set())
-        openMenuAt({ kind: 'node', x: e.clientX, y: e.clientY, ids })
+        openMenuAt({ kind: 'node', x: e.clientX, y: e.clientY, ids, point })
         return
       }
 
-      // 空白处：与左键点空白同义（清空选中），落点就是右键那一处的画布坐标
+      // 空白处：与左键点空白同义（清空选中）
       if (!palette) return // 目录还没拉回来：没有可加的节点，这份菜单画出来也是空的
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (!rect) return
       clearSelection()
-      openMenuAt({
-        kind: 'canvas',
-        x: e.clientX,
-        y: e.clientY,
-        point: toCanvas(e.clientX, e.clientY, rect),
-      })
+      openMenuAt({ kind: 'canvas', x: e.clientX, y: e.clientY, point })
     },
     [panDragged, palette, openMenuAt, clearSelection, toCanvas],
   )
@@ -767,68 +773,101 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }, [pushToast])
 
   /**
+   * 剪贴板内容 -> 待放置的一组：节点坐标先落到快照上（旧节点用 localStorage 迁来的兜底坐标），
+   * 组包围盒中心当作「鼠标抓着的那一点」。``at`` 省略时就用组中心（原位粘贴）。
+   */
+  const placingFrom = useCallback(
+    (clip: ClipboardPayload, at?: Point): Placing => {
+      const base = (n: WorkflowNode): Point => positions[n.id] ?? { x: n.x ?? 0, y: n.y ?? 0 }
+      const nodes = clip.nodes.map((n) => {
+        const b = base(n)
+        return { ...n, x: b.x, y: b.y }
+      })
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const n of nodes) {
+        const nx = n.x ?? 0
+        const ny = n.y ?? 0
+        minX = Math.min(minX, nx)
+        minY = Math.min(minY, ny)
+        maxX = Math.max(maxX, nx + NODE_W)
+        maxY = Math.max(maxY, ny + nodeHeight(nodeDef(n.type, n.config)))
+      }
+      const cx = (minX + maxX) / 2
+      const cy = (minY + maxY) / 2
+      const target = at ?? { x: cx, y: cy }
+      return { nodes, edges: clip.edges, cx, cy, x: target.x, y: target.y }
+    },
+    [positions],
+  )
+
+  /** 落子：把待放置的一组真正写进图（副本换新 id、组内连线重建，新节点成为选中集合）。 */
+  const insertPlacing = useCallback(
+    (next: Placing) => {
+      pushUndo()
+      const offX = next.x - next.cx
+      const offY = next.y - next.cy
+      const idMap = new Map<string, string>()
+      const newNodes = next.nodes.map((n) => {
+        const id = uid(n.type)
+        idMap.set(n.id, id)
+        return {
+          ...n,
+          id,
+          config: structuredClone(n.config),
+          x: (n.x ?? 0) + offX,
+          y: (n.y ?? 0) + offY,
+        }
+      })
+      const newEdges = next.edges.map((e) => ({
+        ...e,
+        source: idMap.get(e.source) ?? e.source,
+        target: idMap.get(e.target) ?? e.target,
+      }))
+      setGraph((g) => ({ nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] }))
+      setSelectedIds(new Set(newNodes.map((n) => n.id)))
+      setSelectedId(null)
+    },
+    [pushUndo],
+  )
+
+  /**
    * Ctrl+V：把剪贴板内容挂成虚影进入「放置模式」——虚影组中心跟着鼠标走，
-   * 左键落子（dropPlacing）/ Esc 取消。
+   * 左键落子（dropPlacing）/ Esc 取消。起点取最近一次画布鼠标位置。
    */
   const startPlacing = useCallback(async () => {
     const clip = await takeClipboard()
     if (!clip || clip.nodes.length === 0) return
-    // 先把坐标落到快照上（旧节点用 localStorage 迁来的兜底坐标），渲染 / 落子都直接读
-    const base = (n: WorkflowNode): Point => positions[n.id] ?? { x: n.x ?? 0, y: n.y ?? 0 }
-    const nodes = clip.nodes.map((n) => {
-      const b = base(n)
-      return { ...n, x: b.x, y: b.y }
-    })
-    // 组包围盒中心：虚影拿它对准鼠标（观感上鼠标「抓着」整组的中腰）
-    let minX = Infinity
-    let minY = Infinity
-    let maxX = -Infinity
-    let maxY = -Infinity
-    for (const n of nodes) {
-      const nx = n.x ?? 0
-      const ny = n.y ?? 0
-      minX = Math.min(minX, nx)
-      minY = Math.min(minY, ny)
-      maxX = Math.max(maxX, nx + NODE_W)
-      maxY = Math.max(maxY, ny + nodeHeight(nodeDef(n.type, n.config)))
-    }
-    const cx = (minX + maxX) / 2
-    const cy = (minY + maxY) / 2
-    // 起点：最近一次画布鼠标位置；没有就退回原位（剪贴板组的中心）
-    const start = lastPointerRef.current ?? { x: cx, y: cy }
-    setPlacing({ nodes, edges: clip.edges, cx, cy, x: start.x, y: start.y })
-  }, [positions, takeClipboard])
+    setPlacing(placingFrom(clip, lastPointerRef.current ?? undefined))
+  }, [placingFrom, takeClipboard])
 
-  /** 落子：按虚影当前所在位置真正放图（副本换新 id、组内连线重建，新节点成为框选集合）。 */
+  /**
+   * 右键「粘贴」：在右键那一处**直接落子**，不做虚影 —— 鼠标已经指名落点了，再让人点一次左键
+   * 没有意义（虚影那套是给键盘 Ctrl+V 用的，它没有落点信息）。顺带收掉可能在挂着的虚影。
+   */
+  const pasteAt = useCallback(
+    async (at: Point) => {
+      const clip = await takeClipboard()
+      if (!clip || clip.nodes.length === 0) {
+        pushToast('info', '剪贴板里没有可粘贴的节点')
+        return
+      }
+      insertPlacing(placingFrom(clip, at))
+      setPlacing(null)
+    },
+    [insertPlacing, placingFrom, pushToast, takeClipboard],
+  )
+
+  /** 虚影落子：写进图 + 收起虚影（这一步会带出补发 click，见下） */
   const dropPlacing = useCallback(() => {
     if (!placing) return
-    pushUndo()
-    const offX = placing.x - placing.cx
-    const offY = placing.y - placing.cy
-    const idMap = new Map<string, string>()
-    const newNodes = placing.nodes.map((n) => {
-      const id = uid(n.type)
-      idMap.set(n.id, id)
-      return {
-        ...n,
-        id,
-        config: structuredClone(n.config),
-        x: (n.x ?? 0) + offX,
-        y: (n.y ?? 0) + offY,
-      }
-    })
-    const newEdges = placing.edges.map((e) => ({
-      ...e,
-      source: idMap.get(e.source) ?? e.source,
-      target: idMap.get(e.target) ?? e.target,
-    }))
-    setGraph((g) => ({ nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] }))
-    setSelectedIds(new Set(newNodes.map((n) => n.id)))
-    setSelectedId(null)
+    insertPlacing(placing)
     setPlacing(null)
     // 落子这一下会带出一发补发 click：立牌子别让它当「点空白」清掉刚选中的新节点
     suppressClickRef.current = true
-  }, [placing, pushUndo])
+  }, [insertPlacing, placing])
 
   /** Ctrl+Z：弹回上一份快照；选中态收敛到快照里仍存在的节点。 */
   const undo = useCallback(() => {
@@ -1080,13 +1119,17 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         )}
       </div>
 
-      {/* 右键菜单（节点复制 / 删除、空白添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
+      {/* 右键菜单（节点复制 / 粘贴 / 删除、空白粘贴 / 添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
       <ContextMenuHost
         state={menuState}
         menuRef={menuRef}
         catalog={palette}
         onCopyNodes={(ids) => {
           copyNodes(ids)
+          closeMenu()
+        }}
+        onPasteAt={(at) => {
+          void pasteAt(at)
           closeMenu()
         }}
         onDeleteNodes={(ids) => {

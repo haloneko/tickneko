@@ -661,6 +661,12 @@
   font-weight: 600;
   color: var(--text-3);
 }
+/* 菜单里分组之间的细线（如「粘贴」与「添加节点」之间） */
+.ctxMenuSep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
 .ctxSubWrap {
   position: relative;
 }
