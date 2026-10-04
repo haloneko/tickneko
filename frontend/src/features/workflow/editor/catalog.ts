@@ -222,6 +222,21 @@ const DEFAULT_COLOR = '#64748b'
 
 /** start 时间形态换色（面板上「开始」只有一个入口，节点按触发方式区分） */
 const START_TIME_COLOR = '#f59e0b'
+/** start 事件形态换色（等平台事件：加好友 / 进群 / 撤回…） */
+const START_EVENT_COLOR = '#a78bfa'
+
+// start 各形态**该露哪几路出口**：注册处声明的是全量端口（三种形态合在一起），
+// 画布按 config.trigger 挑着显示 —— 免得消息触发的图上挂一堆没用的事件出口。
+const START_MESSAGE_PORTS = new Set(['trigger', 'message', 'target'])
+const START_EVENT_PORTS = new Set([
+  'trigger',
+  'event_type',
+  'user_id',
+  'chat',
+  'chat_id',
+  'text',
+  'target',
+])
 
 // --------------------------------------------------------------------------- 尺寸
 export const NODE_W = 168
@@ -312,14 +327,31 @@ function computeNodeDef(type: string, config?: Record<string, unknown>): NodeTyp
   }
 
   if (spec.type === 'start') {
-    // 例外：时间形态只出触发端口，卡片上只显示 cron（消息形态两者都不显示）
-    if (config?.trigger !== 'time') return { ...base, constants: [] }
+    // 例外：**形状随 config.trigger 变** —— 时间形态只出触发口、卡片显示 cron；事件形态
+    // 出「事件那几路」、卡片显示订阅的事件类型；消息形态是触发 + 消息 + 会话定位。
+    const trigger = typeof config?.trigger === 'string' ? config.trigger : 'message'
+    if (trigger === 'time') {
+      return {
+        ...base,
+        label: `${base.label} · 时间`,
+        color: START_TIME_COLOR,
+        outputs: base.outputs.filter((port) => port.id === 'trigger'),
+        constants: ['cron'],
+      }
+    }
+    if (trigger === 'event') {
+      return {
+        ...base,
+        label: `${base.label} · 事件`,
+        color: START_EVENT_COLOR,
+        outputs: base.outputs.filter((port) => START_EVENT_PORTS.has(port.id)),
+        constants: ['event_type'],
+      }
+    }
     return {
       ...base,
-      label: `${base.label} · 时间`,
-      color: START_TIME_COLOR,
-      outputs: base.outputs.filter((port) => port.id === 'trigger'),
-      constants: ['cron'],
+      outputs: base.outputs.filter((port) => START_MESSAGE_PORTS.has(port.id)),
+      constants: [],
     }
   }
   return base
@@ -339,6 +371,7 @@ export function hasDedicatedEditor(nodeType: string, fieldName: string): boolean
 export const TRIGGER_LABELS: Record<string, string> = {
   message: '消息触发（无需配置）',
   time: '时间触发（cron 定时）',
+  event: '事件触发（加好友 / 进群 / 撤回等）',
 }
 
 export function triggerOptionsOf(): string[] {

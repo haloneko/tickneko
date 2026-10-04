@@ -1,18 +1,28 @@
 """开始节点：图的起点；``config.trigger`` 决定触发方式。
 
 config:
-    trigger: ``time``（cron 定时触发）或 ``message``（消息触发，缺省）
-    cron:    ``trigger=time`` 时必填，5 / 6 段 cron 表达式
-    name:    调度任务显示名（可选，缺省用节点 id）
+    trigger:    ``message``（消息触发，缺省）/ ``time``（cron 定时触发）/ ``event``（事件触发）
+    cron:       ``trigger=time`` 时必填，5 / 6 段 cron 表达式
+    name:       调度任务显示名（可选，缺省用节点 id）
+    event_type: ``trigger=event`` 时必填，订阅哪种事件（``*`` = 任何事件）
 
 输出端口：
 
     ``message``  消息触发时外部送进来的那条消息（``ctx.trigger_data["message"]``，没有就空串）；
                  时间触发没有消息，所以那份图别把线接到 ``message`` 出口上
+    ``event_type`` / ``user_id`` / ``chat`` / ``chat_id`` / ``text``
+                 事件触发时那一条事件的数据（什么事件 / 谁 / 哪个会话 / 带的文本）；
+                 消息与时间触发下这些出口没有意义，画布按 trigger 只显示该显示的几路
 
 ``time`` 不自己"到点执行"：把整条流程图登记到
 :class:`~tickneko.core.scheduler.TaskManager`，由调度器按 cron 触发整条流程；``message`` 被动
-等消息接入（消息源留待后续），发布 / 试跑时只写一条开始日志。
+等消息接入（登记到 :class:`~tickneko.workflow.runtime.MessageRouter`）；``event`` 等**平台事件**
+（通知 / 请求，如加好友、进群、撤回、戳一戳）接入 —— 登记到
+:class:`~tickneko.workflow.runtime.EventRouter`，按事件类型匹配。发布 / 试跑时只写一条开始日志。
+
+事件触发认的是**平台原生事件类型名**（OneBot 的 ``notice_type`` / ``request_type``，
+见 :data:`EVENT_TYPE_OPTIONS`）—— 适配器已经把它翻进
+:attr:`~tickneko.platforms.bridge.models.PlatformEvent.event_type`，工作流不必下探原始报文。
 
 **加 / 摘任务只在「登记那一趟」做**（拨运行开关 / 启动载入 / 发布新版，见
 :attr:`NodeExecutionContext.register_triggers`）；整图执行（cron 到点）那一趟不碰调度器
@@ -30,15 +40,37 @@ from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec
 from .registry import register_node
 
 #: start 节点的触发方式，**顺序即画布下拉顺序**：message = 消息触发（缺省）；
-#: time = cron 定时触发（需配 cron）
-START_TRIGGER_ORDER: tuple[str, ...] = ("message", "time")
+#: time = cron 定时触发（需配 cron）；event = 事件触发（需配 event_type）
+START_TRIGGER_ORDER: tuple[str, ...] = ("message", "time", "event")
 
 #: 触发方式集合（校验用；与上面的顺序表同一份内容）
 START_TRIGGERS: frozenset[str] = frozenset(START_TRIGGER_ORDER)
 
+#: 事件触发订阅哪种事件，**顺序即画布下拉顺序**：``"*"`` = 任何事件都触发；其余是
+#: **平台原生事件类型名**（OneBot 的 ``notice_type`` / ``request_type``），按它与
+#: :attr:`~tickneko.platforms.bridge.models.PlatformEvent.event_type` 全等匹配。
+#: 目前只有 OneBot 上报这类事件（Kook 适配器还只翻消息），所以清单按 OneBot 的口径列。
+EVENT_TYPE_OPTIONS: tuple[str, ...] = (
+    "*",  # 任何事件
+    "friend",  # 加好友请求（request）
+    "group",  # 加群 / 邀请入群请求（request）
+    "group_increase",  # 有人进群
+    "group_decrease",  # 有人退群 / 被踢
+    "group_ban",  # 群禁言
+    "group_recall",  # 群消息被撤回
+    "friend_recall",  # 私聊消息被撤回
+    "group_upload",  # 群文件上传
+    "friend_add",  # 好友添加成功
+    "notify",  # 戳一戳 / 群荣誉一类（sub_type 区分，要细分交给下游节点）
+)
+
+#: 事件类型集合（校验用；与上面的顺序表同一份内容）
+EVENT_TYPES: frozenset[str] = frozenset(EVENT_TYPE_OPTIONS)
+
 
 def validate_start_node(node: WorkflowNode) -> list[ValidationIssue]:
-    """start 配置校验：trigger 只能是 time/message（缺省 message）；time 时 cron 必填且合法。"""
+    """start 配置校验：trigger 只能是 message/time/event（缺省 message）；
+    time 时 cron 必填且合法，event 时 event_type 必填且认得。"""
     trigger = node.config.get("trigger", "message")
     if not isinstance(trigger, str) or trigger not in START_TRIGGERS:
         return [
@@ -46,12 +78,38 @@ def validate_start_node(node: WorkflowNode) -> list[ValidationIssue]:
                 node_id=node.id,
                 code="INVALID_TRIGGER",
                 message=f"start 节点 {node.id} 的触发方式 {trigger!r} 不合法",
-                suggestion="config.trigger 只能是 time（定时）或 message（消息）",
+                suggestion="config.trigger 只能是 message（消息）/ time（定时）/ event（事件）",
             )
         ]
-    if trigger != "time":
-        return []
-    return validate_time_cron(node)
+    if trigger == "time":
+        return validate_time_cron(node)
+    if trigger == "event":
+        return validate_event_type(node)
+    return []
+
+
+def validate_event_type(node: WorkflowNode) -> list[ValidationIssue]:
+    """``trigger=event`` 的配置：event_type 必填且是认得的事件类型。"""
+    event_type = node.config.get("event_type")
+    if not isinstance(event_type, str) or not event_type.strip():
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="MISSING_CONFIG",
+                message=f"start 节点 {node.id} 选择了事件触发，但缺少必填配置 event_type（订阅哪种事件）",
+                suggestion="在 config.event_type 里填事件类型，如 friend（加好友请求）；填 * 表示任何事件都触发",
+            )
+        ]
+    if event_type not in EVENT_TYPES:
+        return [
+            ValidationIssue(
+                node_id=node.id,
+                code="INVALID_EVENT_TYPE",
+                message=f"start 节点 {node.id} 订阅的事件类型 {event_type!r} 不认得",
+                suggestion=f"可选：{' / '.join(EVENT_TYPE_OPTIONS)}",
+            )
+        ]
+    return []
 
 
 def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
@@ -96,13 +154,21 @@ def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
         TRIGGER_PORT,
         PortSpec("message", "message", "消息"),
         PortSpec("target", "target", "会话定位"),
+        # 事件触发（trigger=event）才有意义的几路：什么事件 / 谁 / 哪个会话 / 事件带的文本
+        PortSpec("event_type", "message", "事件类型"),
+        PortSpec("user_id", "message", "对方"),
+        PortSpec("chat", "message", "会话类型"),
+        PortSpec("chat_id", "message", "会话号"),
+        PortSpec("text", "message", "事件文本"),
     ],
     fields=[
         ConfigField("trigger", "触发方式", default="message", options=START_TRIGGER_ORDER),
-        # cron / name 只在 trigger=time 时有意义（message 触发下既不校验也没用处），但仍然是
-        # 这张图**认**的字段，所以照实声明 —— 画布拿到什么就渲染什么，不再自己猜。
+        # cron / name 只在 trigger=time 时有意义，event_type 只在 trigger=event 时有意义
+        #（其余触发方式下既不校验也没用处），但仍然是这张图**认**的字段，所以照实声明
+        # —— 画布拿到什么就渲染什么，不再自己猜。
         ConfigField("cron", "cron 表达式"),
         ConfigField("name", "调度任务名"),
+        ConfigField("event_type", "事件类型", options=EVENT_TYPE_OPTIONS),
     ],
     validator=validate_start_node,
 )
@@ -111,6 +177,8 @@ async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     trigger = str(node.config.get("trigger", "message"))
     if trigger == "time":
         return await _register_cron(node, ctx)
+    if trigger == "event":
+        return _event_payload(node, ctx)
 
     # 消息触发的消息是「外面送进来的」：调用方把它放在 ctx.trigger_data 里，这里原样从
     # message 出口送下去（消息源还没接，缺省就是空串）。target 出口同理：带会话定位
@@ -121,6 +189,30 @@ async def exec_start(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
     ctx.log.append(f"[start] {node.id} 流程开始（消息触发）")
     ctx.logger.info("工作流开始（消息触发，等待消息进入）", node_id=node.id)
     return {"message": message, "target": target}
+
+
+def _event_payload(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
+    """``trigger=event``（执行那一趟）：把这一条事件的数据从出口送下去。
+
+    事件不是消息，没有「正文」这回事 —— 送下去的是**事件本身的几样**：什么事件、谁、
+    哪个会话、事件带的文本（加好友请求里的招呼语 / 验证信息）。``target`` 也带上
+    （适配器构造的会话定位），方便「同意好友后回一句话」这类动作。
+
+    登记不在节点里做（同消息触发）：由 :class:`~tickneko.workflow.runtime.EventRouter`
+    在「登记那一趟」订阅，见 :func:`tickneko.workflow.runtime.register_published_workflow`。
+    """
+    data = ctx.trigger_data
+    event_type = str(data.get("event_type", ""))
+    ctx.log.append(f"[start] {node.id} 流程开始（事件触发：{event_type or '任意'}）")
+    ctx.logger.info("工作流开始（事件触发）", node_id=node.id, event_type=event_type)
+    return {
+        "event_type": event_type,
+        "user_id": str(data.get("user_id", "")),
+        "chat": str(data.get("chat", "")),
+        "chat_id": str(data.get("chat_id", "")),
+        "text": str(data.get("text", "")),
+        "target": data.get("target"),
+    }
 
 
 def workflow_task_id(workflow_id: str, node_id: str) -> str:

@@ -21,7 +21,7 @@ tickneko/workflow/
 ├── nodes/           ★ 节点执行器：一类节点一个文件 + 注册表（**写自己的节点看这里**）
 │   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / NodeExecutionContext
 │   ├── registry.py      注册表：register_node / declare_node_type / get_spec / load_node_modules
-│   ├── start.py         内置：start（图起点；trigger=time 时按 cron 登记调度器）
+│   ├── start.py         内置：start（图起点；trigger=time 按 cron 登记调度器、trigger=event 订阅平台事件）
 │   ├── end.py           内置：end（图终点）
 │   ├── log.py           内置：log（按级别写业务日志；内容从 message 入口来）
 │   ├── test.py          内置：test（调试：回显入口的值到日志，画布联调用）
@@ -41,7 +41,7 @@ tickneko/workflow/
 │   └── placeholder.py   内置：placeholder（占位：只透传不做事，参与画布理线）
 ├── graph.py         图的小工具：出边索引 / 可达集合 / 入口节点 / 边端口（校验器与运行器共用）
 ├── executor.py      运行器：只跑 start 可达的主流程，按拓扑顺序执行 + **按边投递数据** + **按选中出口剪枝**
-└── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记定时触发（不执行图）；
+└── runtime.py       运行时：启动只给**开着运行开关**的已发布流登记触发（定时 / 消息 / 事件，不执行图）；
                      到点后加载该版本跑整条流程；拨开关即时启停（WorkflowTriggers）
 ```
 
@@ -159,7 +159,7 @@ workflow_versions             每次保存一张不可变图快照
 |---|---|---|---|
 | `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `input_value`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— | —— |
 | `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— | —— |
-| `start.py` | 图起点（`role="start"`）；`trigger=time` 时把整条流程按 cron 登记到调度器 —— **只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版），整图执行那一趟不碰调度器（它自己会排下一次） | — → `trigger` / `message` | `trigger`（缺省 `message`，注册默认值）、`cron`（time 触发必填，自注册校验器）、`name` |
+| `start.py` | 图起点（`role="start"`），**三种触发方式**：`message` 等消息接入（登记到 `MessageRouter`）；`time` 把整条流程按 cron 登记到调度器；`event` 订阅平台事件（加好友 / 进群 / 撤回 / 戳一戳…，登记到 `EventRouter`，按事件类型匹配）—— **加 / 摘触发只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版），整图执行那一趟不碰调度器（它自己会排下一次） | — → `trigger` / `message` / `target`（消息形态）+ `event_type` / `user_id` / `chat` / `chat_id` / `text`（事件形态；注册处声明全量，画布按 `trigger` 挑着显示） | `trigger`（缺省 `message`，注册默认值：`message` / `time` / `event`）、`cron`（time 触发必填，自注册校验器）、`name`、`event_type`（event 触发必填，可选项见 `EVENT_TYPE_OPTIONS`，`*` = 任何事件） |
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | `trigger` → — | —— |
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | **调试**：把入口的值**回显**到日志（还附一份**全部入口值**的快照），再原样从出口送下去 —— 夹在中间看「线上流过了什么」；不改写、不判断，纯粹给画布联调用 | `trigger` / `message` → `trigger` / `message` | `message`（没接线时的手填值，缺省 `hello`） |
@@ -457,7 +457,7 @@ async def test_my_node_outputs(...) -> None:
 | 新的 HTTP 接口 | `tickneko/api/api/workflow/`（入口层，路由 + 请求 / 响应 schema） |
 | 新的执行语义（并发 / 重试） | `executor.py`（串行 + 分支剪枝已就位；换引擎就换这个类，调用方只认 `run()`） |
 | 图算法（可达集合 / 拓扑遍历 / 找入口） | `graph.py`（校验器与运行器共用一份，**别再各写一份 BFS**） |
-| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流） |
+| 发布 / 触发链路 | `runtime.py`（启动 `load_published_workflows` 只登记**开着开关**的；`WorkflowTriggers.start/stop` 给接口层即时启停；到点 `make_trigger` → `run_published_workflow` 跑整条流程，**加 / 摘任务只在登记那一趟**，跑图这趟不碰调度器 —— 见 `NodeExecutionContext.register_triggers`；消息触发走 `MessageRouter`，`dispatch(owner_id)` 按归属跑匹配工作流；**事件触发走 `EventRouter`**，除归属外还按 `event_type` 匹配订阅） |
 | 给 `ctx` 注入新能力（如平台总线） | `nodes/base.py`（加参数与属性）+ `runtime.py`（`register_published_workflow` / `make_trigger` / `run_published_workflow` 全链路 keyword-only 透传）+ 装配处（`bootstrap.py`）—— **调度器到点执行的是登记那一趟构造的闭包**，能力必须从登记链路就带上（见 `send.py` 模块文档） |
 | 给 `ctx` 加「缺省就有、可注入」的服务（如缓存门面） | 只动 `nodes/base.py`：参数缺省值落进程级单例 / 框架实例（如 `tickneko.core.cache.cache`），测试再注入自己的假对象 —— 单例不涉「登记那一趟」的时机问题，**不用走 runtime / bootstrap 透传**（见 `cache.py` 模块文档） |
 

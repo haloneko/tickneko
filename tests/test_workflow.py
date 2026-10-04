@@ -2735,10 +2735,15 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
     start = get_spec("start")
     assert start is not None
     start_fields = {f.name: f for f in start.fields}
+    from tickneko.workflow.nodes.start import EVENT_TYPE_OPTIONS
+
     assert start_fields["trigger"].default == "message"
-    assert start_fields["trigger"].options == ("message", "time")
+    assert start_fields["trigger"].options == ("message", "time", "event")
     assert "cron" in start_fields  # 时间形态用到的字段也照实声明
     assert "name" in start_fields
+    # 事件形态：订阅哪种事件也是后端声明的下拉（画布不再自己抄一份事件类型）
+    assert start_fields["event_type"].options == EVENT_TYPE_OPTIONS
+    assert "*" in EVENT_TYPE_OPTIONS  # 通配：任何事件都触发
 
     test = get_spec("test")
     assert test is not None
@@ -2756,7 +2761,13 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     from tickneko.workflow import get_spec
 
     expected: dict[str, tuple[int, str, list[str], list[str]]] = {
-        "start": (10, "开始", [], ["trigger", "message", "target"]),
+        # start 声明的是**全量**端口（消息形态 + 事件形态），画布按 config.trigger 挑着显示
+        "start": (
+            10,
+            "开始",
+            [],
+            ["trigger", "message", "target", "event_type", "user_id", "chat", "chat_id", "text"],
+        ),
         "end": (20, "结束", ["trigger"], []),
         "constant": (30, "常量", ["trigger"], ["trigger", "value"]),
         "log": (40, "写日志", ["trigger", "message"], ["trigger"]),
@@ -4774,3 +4785,177 @@ async def test_api_publishing_again_while_enabled_re_registers() -> None:
         ("stop", workflow_id, 1),
         ("start", workflow_id, 2),
     ]
+
+
+# ------------------------------------------------------- 事件触发（trigger=event）
+def test_event_trigger_needs_a_known_event_type() -> None:
+    """trigger=event：event_type 必填且得是认得的事件类型；别的触发方式不管它。"""
+    from tickneko.workflow.nodes.start import validate_start_node
+
+    missing = WorkflowNode(id="s", type="start", config={"trigger": "event"})
+    assert [i.code for i in validate_start_node(missing)] == ["MISSING_CONFIG"]
+
+    unknown = WorkflowNode(id="s", type="start", config={"trigger": "event", "event_type": "like"})
+    assert [i.code for i in validate_start_node(unknown)] == ["INVALID_EVENT_TYPE"]
+
+    ok = WorkflowNode(id="s", type="start", config={"trigger": "event", "event_type": "friend"})
+    assert validate_start_node(ok) == []
+    # 消息触发不查 event_type（填了也不管）
+    assert (
+        validate_start_node(WorkflowNode(id="s", type="start", config={"trigger": "message"}))
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_node_emits_event_data() -> None:
+    """事件触发那一趟：事件类型 / 谁 / 哪个会话 / 事件带的文本，从出口送下去。"""
+    from tickneko.workflow.nodes.start import exec_start
+
+    ctx_ = NodeExecutionContext()
+    ctx_.trigger_data = {
+        "event_type": "friend",
+        "user_id": "10001",
+        "chat": "private",
+        "chat_id": "10001",
+        "text": "加个好友",
+        "target": None,
+    }
+    out = await exec_start(
+        WorkflowNode(id="s", type="start", config={"trigger": "event", "event_type": "friend"}),
+        ctx_,
+    )
+    assert out["event_type"] == "friend"
+    assert out["user_id"] == "10001"
+    assert out["chat"] == "private"
+    assert out["chat_id"] == "10001"
+    assert out["text"] == "加个好友"
+
+
+@pytest.mark.asyncio
+async def test_event_router_matches_only_subscribed_types() -> None:
+    """事件路由：只跑**订阅了这种事件**的工作流（``*`` = 任何事件都跑），不做前缀匹配。"""
+    from tickneko.workflow.runtime import EventRouter
+
+    router = EventRouter()
+    calls: list[tuple[str, str]] = []
+
+    async def run(workflow_id: str, version: int, **kw: object) -> None:
+        data = kw.get("trigger_data") or {}
+        calls.append((workflow_id, str(data.get("event_type", ""))))
+
+    router.attach(run)
+    router.register("friend-flow", 1, "u-admin", "friend")
+    router.register("any-flow", 2, "u-admin", "*")  # 通配：任何事件都跑
+    router.register("other-flow", 1, "u-2", "friend")
+
+    assert await router.dispatch("u-admin", trigger_data={"event_type": "friend"}) == 2
+    assert sorted(calls) == [("any-flow", "friend"), ("friend-flow", "friend")]
+
+    calls.clear()
+    # 没订阅这种类型：只有通配那条跑（订阅 friend 的不会被 group_increase 拉起来）
+    assert await router.dispatch("u-admin", trigger_data={"event_type": "group_increase"}) == 1
+    assert calls == [("any-flow", "group_increase")]
+    # 别的归属不受影响
+    assert await router.dispatch("u-x", trigger_data={"event_type": "friend"}) == 0
+
+
+@pytest.mark.asyncio
+async def test_event_without_type_is_not_dispatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没有事件类型的事件（如 Kook 的系统消息）不触发任何事件工作流 —— ``*`` 订阅也不该被拉起。"""
+    from tickneko import bootstrap
+    from tickneko.platforms.bridge.models import PlatformEvent
+    from tickneko.workflow.runtime import EventRouter
+
+    router = EventRouter()
+    calls: list[str] = []
+
+    async def run(workflow_id: str, version: int, **kw: object) -> None:
+        calls.append(workflow_id)
+
+    router.attach(run)
+    router.register("any-flow", 1, "u-admin", "*")
+    monkeypatch.setattr(bootstrap, "_event_router", router)
+
+    await bootstrap._dispatch_event(
+        PlatformEvent(platform="kook", owner_id="u-admin", kind="notice")
+    )
+    assert calls == []
+
+    # 有事件类型才会分发（同一份路由）
+    await bootstrap._dispatch_event(
+        PlatformEvent(platform="onebot", owner_id="u-admin", kind="notice", event_type="poke")
+    )
+    assert calls == ["any-flow"]
+
+
+@pytest.mark.asyncio
+async def test_event_graph_validates_and_carries_event_data_downstream() -> None:
+    """事件触发的图能过校验，并且事件数据（这里用 text）沿边送到下游节点。"""
+    data = {
+        "nodes": [
+            node("s", "start", trigger="event", event_type="friend"),
+            node("t", "test"),
+            node("e", "end"),
+        ],
+        "edges": [
+            edge("s", "t"),
+            edge("s", "t", "text", "message"),  # 事件文本 -> 调试节点回显
+            edge("t", "e"),
+            edge("s", "e"),
+        ],
+    }
+    report = validate_graph(data)
+    assert report.valid, report.errors
+
+    ctx_ = NodeExecutionContext()
+    ctx_.trigger_data = {"event_type": "friend", "user_id": "10001", "text": "加个好友"}
+    await SimpleWorkflowRunner().run(WorkflowGraph.model_validate(data), ctx_)
+    assert any("加个好友" in line for line in ctx_.log)  # 调试节点把流过的那句话回显了
+
+
+@pytest.mark.asyncio
+async def test_register_and_stop_event_trigger() -> None:
+    """登记那一趟：事件触发的开始节点登记到 EventRouter（不跑执行器）；停用整条摘掉。"""
+    from tickneko.core.scheduler import TaskManager
+    from tickneko.workflow.runtime import (
+        EventRouter,
+        register_published_workflow,
+        stop_published_workflow,
+    )
+
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SqlWorkflowStore(engine)
+    await store.ensure_schema()
+    graph = {
+        "nodes": [node("s", "start", trigger="event", event_type="friend"), node("e", "end")],
+        "edges": [edge("s", "e")],
+    }
+    try:
+        definition = await store.create("u-admin", "加好友自动打招呼")
+        await store.add_version(
+            definition,
+            graph_json=canonical_graph_json(graph),
+            checksum=graph_checksum(graph),
+        )
+        assert await store.publish(definition.id, 1) is not None
+
+        router = EventRouter()
+        scheduler = TaskManager()
+        assert (
+            await register_published_workflow(
+                definition.id, 1, store, scheduler, event_router=router
+            )
+            == 1
+        )
+        assert router.routes_of("u-admin") == {definition.id: (1, "friend")}
+
+        assert (
+            await stop_published_workflow(definition.id, 1, store, scheduler, event_router=router)
+            == 1
+        )
+        assert router.routes_of("u-admin") == {}
+    finally:
+        await engine.dispose()

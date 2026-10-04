@@ -403,7 +403,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [pushUndo],
   )
 
-  /** 切换开始节点的触发方式：time 补默认 cron；message 清掉 cron。 */
+  /** 切换开始节点的触发方式：time 补默认 cron、event 补默认事件类型；其余把不相关的清掉。 */
   const setStartTrigger = useCallback(
     (id: string, trigger: string) => {
       pushUndo()
@@ -413,7 +413,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           if (n.id !== id || n.type !== 'start') return n
           const config: Record<string, unknown> = { ...n.config, trigger }
           if (trigger === 'time' && typeof config.cron !== 'string') config.cron = '*/5 * * * *'
-          if (trigger === 'message') delete config.cron
+          // 事件触发：没填过就给「任何事件」（*），免得刚切过去就是一个校验不过的空值
+          if (trigger === 'event' && typeof config.event_type !== 'string') config.event_type = '*'
+          if (trigger !== 'time') delete config.cron
+          if (trigger !== 'event') delete config.event_type
           return { ...n, config }
         }),
       }))
