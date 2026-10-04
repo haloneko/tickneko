@@ -40,6 +40,8 @@ export interface CanvasProps {
   onMouseUp: () => void
   onWheel: (event: React.WheelEvent) => void
   onClick: () => void
+  /** 右键空白：不拖动画布（没平移）时弹「添加节点」菜单，见父组件的 ``onCanvasContextMenu`` */
+  onContextMenu: (event: React.MouseEvent) => void
   children: ReactNode
 }
 
@@ -56,6 +58,7 @@ export function Canvas({
   onMouseUp,
   onWheel,
   onClick,
+  onContextMenu,
   children,
 }: CanvasProps) {
   return (
@@ -63,7 +66,7 @@ export function Canvas({
       ref={canvasRef}
       className={styles.canvas}
       style={{ cursor: panning ? 'grabbing' : 'default', ...canvasGridStyle(pan, zoom) }}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={onContextMenu}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
@@ -77,7 +80,7 @@ export function Canvas({
         >
           <div className={styles.canvasContent} style={{ zoom: String(zoom) }}>
             {children}
-            {empty && <div className={styles.empty}>从左侧点节点名添加到画布</div>}
+            {empty && <div className={styles.empty}>右键空白处添加节点，或从左侧面板点选 / 拖入</div>}
             {boxSel && <BoxSelection rect={boxSel} />}
           </div>
         </div>

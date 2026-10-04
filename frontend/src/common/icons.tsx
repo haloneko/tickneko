@@ -148,6 +148,23 @@ export const IconCopy = (p: IconProps) => (
   </svg>
 )
 
+/** 粘贴：带夹子的剪贴板（与 IconCopy 区分开，右键菜单里两个动作挨着） */
+export const IconPaste = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M9 4.6H7.6A1.6 1.6 0 006 6.2v12.2A1.6 1.6 0 007.6 20h8.8a1.6 1.6 0 001.6-1.6V6.2a1.6 1.6 0 00-1.6-1.6H15" />
+    <rect x="9" y="2.8" width="6" height="3.6" rx="1.3" />
+  </svg>
+)
+
+/** 剪切：剪刀（两个刃口对着上下两个环） */
+export const IconScissors = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="6.4" cy="6.4" r="2.7" />
+    <circle cx="6.4" cy="17.6" r="2.7" />
+    <path d="M20 4.4L8.6 15.8M20 19.6L8.6 8.2M14.6 13.8L12 12" />
+  </svg>
+)
+
 export const IconExternal = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M7 17L17 7M9 7h8v8" />
