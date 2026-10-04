@@ -19,7 +19,8 @@
  * * ``editor/Palette.tsx``         节点面板
  * * ``editor/Inspector.tsx``       配置面板 + 校验报告 + 版本历史
  * * ``editor/Toolbar.tsx``         顶部工具栏
- * * ``editor/ContextMenu.tsx``     节点右键菜单
+ * * ``editor/ContextMenu.tsx``     节点右键菜单（删除）
+ * * ``editor/CanvasMenu.tsx``      空白处右键菜单（分类 + 二级菜单添加节点）
  * * ``editor/useWorkflowDoc.ts``    暂存 / 校验 / 提交版本 / 发布 / 运行开关（后端那一半）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -35,6 +36,7 @@ import { useToast } from '../../common/Toast'
 import { copyText, readText } from '../../lib/clipboard'
 import { Canvas, type BoxRect } from './editor/Canvas'
 import { centeredNodePosition } from './editor/canvasGeometry'
+import { CanvasMenu } from './editor/CanvasMenu'
 import {
   buildClipboardPayload,
   formatCopiedAt,
@@ -99,6 +101,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [boxSel, setBoxSel] = useState<BoxRect | null>(null)
   /** 节点右键菜单：视口坐标 + 这一次要操作的节点集合 */
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null)
+  /** 空白处右键菜单：视口坐标 + 要落子的画布坐标（新节点以它为中心） */
+  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number; point: Point } | null>(null)
   /**
    * 粘贴虚影（Ctrl+V 放置模式）：剪贴板内容先以半透明预览跟鼠标走，左键落子才真正放图。
    * x/y = 虚影组中心当前所在画布坐标；cx/cy = 组中心在剪贴板坐标里的位置。
@@ -132,6 +136,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   /** 框选结束的松手会被浏览器补发一发 click，用它立牌子吞掉（见画布 onClick） */
   const suppressClickRef = useRef(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  /** 空白处右键菜单的根节点（点它里面不算「点别处」） */
+  const canvasMenuRef = useRef<HTMLDivElement>(null)
   /** 本次右键是否真的拖动过画布（拖过就不弹节点右键菜单） */
   const panMovedRef = useRef(false)
   /**
@@ -493,6 +499,27 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [openNodeMenu],
   )
 
+  /**
+   * 右键空白：弹「添加节点」菜单（分类 + 二级菜单），落点就是右键那一处的画布坐标。
+   *
+   * 右键按住拖动是平移（``panMovedRef``），拖过就不弹菜单 —— 一个键两种用途靠「动没动」区分。
+   * 目录还没拉回来时没东西可加，直接不弹。
+   */
+  const onCanvasContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      if (panMovedRef.current) return // 刚用右键拖过画布：那是平移，不弹菜单
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect || !palette) return
+      // 空白处右键与左键点空白同义：收掉节点菜单与选中态
+      setCtxMenu(null)
+      setSelectedId(null)
+      setSelectedIds(new Set())
+      setCanvasMenu({ x: e.clientX, y: e.clientY, point: toCanvas(e.clientX, e.clientY, rect) })
+    },
+    [palette, toCanvas],
+  )
+
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
       // 右键：开始平移（动没动过留给 panMovedRef 记，松手时决定弹不弹节点菜单）
@@ -519,8 +546,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (!rect) return
     if (panRef.current) {
       const { startX, startY, panX, panY } = panRef.current
-      if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 3) {
+      if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 3 && !panMovedRef.current) {
+        // 真的开始平移了：菜单（若有）收掉 —— mac 上 contextmenu 是右键**按下**就发的，
+        // 不在这里收，会出现「菜单挂在那儿、画布还在跟着拖」
         panMovedRef.current = true
+        setCtxMenu(null)
+        setCanvasMenu(null)
       }
       setPan({ x: panX + (e.clientX - startX), y: panY + (e.clientY - startY) })
       return
@@ -869,15 +900,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     return () => window.removeEventListener('keydown', onKey)
   }, [drafting, draft, undo, copySelection, getSelectionIds, startPlacing, deleteNodesByIds, placing])
 
-  // 右键菜单：点别处（或按 Esc）关闭
+  // 右键菜单：点别处（或按 Esc）关闭（节点菜单 / 空白菜单共用一套关闭逻辑，两者不会同时开着）
   useEffect(() => {
-    if (!ctxMenu) return
+    if (!ctxMenu && !canvasMenu) return
     const onDown = (e: MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return
+      const target = e.target as Node
+      if (menuRef.current?.contains(target) || canvasMenuRef.current?.contains(target)) return
       setCtxMenu(null)
+      setCanvasMenu(null)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setCtxMenu(null)
+      if (e.key === 'Escape') {
+        setCtxMenu(null)
+        setCanvasMenu(null)
+      }
     }
     document.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
@@ -885,7 +921,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       document.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey)
     }
-  }, [ctxMenu])
+  }, [ctxMenu, canvasMenu])
 
   // ---- 渲染辅助 ----
   const selectedNode = selectedId ? nodeById.get(selectedId) ?? null : null
@@ -977,6 +1013,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           onMouseUp={onCanvasMouseUp}
           onWheel={onCanvasWheel}
           onClick={onCanvasClick}
+          onContextMenu={onCanvasContextMenu}
         >
           <EdgeLayer
             edges={graph.edges}
@@ -1063,6 +1100,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           />
         )}
       </div>
+
+      {/* 空白处右键菜单：一级分类、二级节点类型，点了就在右键那一处落子 */}
+      {canvasMenu && palette && (
+        <CanvasMenu
+          x={canvasMenu.x}
+          y={canvasMenu.y}
+          items={palette}
+          menuRef={canvasMenuRef}
+          onAdd={(type) => {
+            addNode(type, canvasMenu.point)
+            setCanvasMenu(null)
+          }}
+        />
+      )}
 
       {/* 节点右键菜单：fixed 定位（视口坐标），点别处 / Esc 关闭 */}
       {ctxMenu && (

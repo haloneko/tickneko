@@ -653,3 +653,58 @@
 .ctxMenuItemDanger:hover {
   background: var(--danger-bg);
 }
+
+/* 空白处右键菜单：一级是分类（带数量与右箭头），二级是该分类下的节点类型 */
+.ctxMenuTitle {
+  padding: 5px 9px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.ctxSubWrap {
+  position: relative;
+}
+.ctxMenuCount {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ctxMenuArrow {
+  display: flex;
+  color: var(--text-3);
+}
+.ctxDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+/* 分类那一级的圆点只是个装饰，颜色不表示端口类型 */
+.ctxDotGroup {
+  background: var(--text-3);
+  opacity: 0.55;
+}
+.ctxSubMenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 4px);
+  z-index: 1;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+/* 视口右边装不下：二级菜单翻到左边 */
+.ctxSubMenuLeft {
+  left: auto;
+  right: calc(100% + 4px);
+}
+/* 视口下沿装不下：二级菜单从这一行往上长 */
+.ctxSubMenuUp {
+  top: auto;
+  bottom: -6px;
+}
