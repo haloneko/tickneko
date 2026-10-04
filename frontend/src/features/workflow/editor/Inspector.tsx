@@ -8,12 +8,10 @@
 import { IconTrash } from '../../../common/icons'
 import { CronPicker } from '../../../common/CronPicker'
 import {
-  TRIGGER_LABELS,
   hasDedicatedEditor,
   isDataPort,
   portColor,
   portEffKey,
-  triggerOptionsOf,
   type NodeTypeDef,
   type ValidationReport,
   type WorkflowNode,
@@ -32,7 +30,6 @@ export interface InspectorProps {
   report: ValidationReport | null
   versions: WorkflowVersionData[]
   onUpdate: (nodeId: string, key: string, value: unknown) => void
-  onSetStartTrigger: (nodeId: string, trigger: string) => void
   onDelete: (nodeId: string) => void
 }
 
@@ -44,7 +41,6 @@ export function Inspector({
   report,
   versions,
   onUpdate,
-  onSetStartTrigger,
   onDelete,
 }: InspectorProps) {
   return (
@@ -104,24 +100,8 @@ export function Inspector({
             <label className={styles.label}>节点 ID</label>
             <input className={styles.input} value={node.id} disabled />
           </div>
-          {node.type === 'start' && (
-            <div className={styles.field}>
-              <label className={styles.label}>触发方式</label>
-              <select
-                className={styles.input}
-                value={String(node.config.trigger ?? 'message')}
-                onChange={(e) => onSetStartTrigger(node.id, e.target.value)}
-              >
-                {triggerOptionsOf().map((option) => (
-                  <option key={option} value={option}>
-                    {TRIGGER_LABELS[option] ?? option}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {/* cron：走可视化选择器（手填表达式太容易写错，见 hasDedicatedEditor） */}
-          {node.type === 'start' && (
+          {/* cron：定时触发器的专属字段，走可视化选择器（手填表达式太容易写错） */}
+          {node.type === 'trigger-time' && (
             <div className={styles.field}>
               <label className={styles.label}>cron 表达式</label>
               <CronPicker

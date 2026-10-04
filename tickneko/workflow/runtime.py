@@ -154,36 +154,25 @@ def _message_start_ids(graph: WorkflowGraph) -> set[str]:
     """图里 ``trigger=message`` 的开始节点 id 集合（图是 ``WorkflowGraph``）。
 
     消息触发与时间触发分走两条登记路：时间触发登记到调度器（cron），消息触发登记到
-    :class:`MessageRouter`（按 owner 路由）。这里只负责认「哪些开始节点是消息触发」，
-    依据是 start 节点 ``config.trigger``（缺省 ``message``，见 :mod:`tickneko.workflow.nodes.start`）。
+    :class:`MessageRouter`（按 owner 路由）。这里只负责认「哪些开始节点是消息触发」——
+    依据是**节点类型** ``trigger-message``（见 :mod:`tickneko.workflow.nodes.triggers`）。
     """
-    message_starts: set[str] = set()
-    for node in graph.nodes:
-        spec = get_spec(node.type)
-        if spec is None or spec.role != "start":
-            continue
-        # 显式认 message（缺省也是 message）：别把 event 触发的开始节点也当成消息触发
-        if str(node.config.get("trigger", "message")) == "message":
-            message_starts.add(node.id)
-    return message_starts
+    # 触发器拆成三个节点之后，触发方式由**节点类型**直接决定（不再看 config）
+    return {node.id for node in graph.nodes if node.type == "trigger-message"}
 
 
 def _event_start_ids(graph: WorkflowGraph) -> dict[str, str]:
     """图里**事件触发**的开始节点：``节点 id -> 订阅的事件类型``（``"*"`` = 任何事件）。
 
-    与 :func:`_message_start_ids` 同一条依据（start 节点的 ``config.trigger``），只是认
-    ``event`` 那一档，并把订阅的事件类型一起带出来给 :class:`EventRouter` 登记。
+    与 :func:`_message_start_ids` 同一条依据（节点类型），订阅的事件类型一起带出来给
+    :class:`EventRouter` 登记。
     """
-    event_starts: dict[str, str] = {}
-    for node in graph.nodes:
-        spec = get_spec(node.type)
-        if spec is None or spec.role != "start":
-            continue
-        if str(node.config.get("trigger", "message")) != "event":
-            continue
-        # 没填（校验会拦）就按「任何事件」处理，登记那一趟别因此崩掉
-        event_starts[node.id] = str(node.config.get("event_type", "") or "*")
-    return event_starts
+    # 没填（校验会拦）就按「任何事件」处理，登记那一趟别因此崩掉
+    return {
+        node.id: str(node.config.get("event_type", "") or "*")
+        for node in graph.nodes
+        if node.type == "trigger-event"
+    }
 
 
 async def register_published_workflow(
@@ -199,7 +188,7 @@ async def register_published_workflow(
     """**只跑开始节点、不跑下游**：把这一版的触发登记好，返回跑过的开始节点数量。
 
     时间触发的开始节点，执行器做的就是「按 cron 把整条流程登记到调度器」（见
-    :func:`tickneko.workflow.nodes.start.exec_start`）；消息触发的登记到
+    :func:`tickneko.workflow.nodes.triggers.exec_trigger_time`）；消息触发的登记到
     :class:`MessageRouter`（按 owner 路由，消息进来时跑）。两种都只处理**开始节点自己**，
     后面的节点一个都不跑 —— 启动载入不是执行。以前这里是「跑一遍整张图，靠开始节点顺带
     登记」，代价是每次开机都真的把整条流程执行一次（下游的 http / log 全都跟着跑了），
@@ -300,7 +289,7 @@ async def stop_published_workflow(
 ) -> int:
     """把这一版里**开始节点登记过的触发**摘掉（定时任务 + 消息 / 事件路由），返回摘掉的数量。
 
-    与登记对称：定时任务名由 :func:`tickneko.workflow.nodes.start.workflow_task_id` 定
+    与登记对称：定时任务名由 :func:`tickneko.workflow.nodes.triggers.workflow_task_id` 定
     （``wf-<工作流 id>-<节点 id>``），照图里的开始节点算一遍 id 去摘；消息触发的从
     :class:`MessageRouter` 摘除（按 workflow_id）—— **不用把图跑一遍**（那是执行，不是停机）。
 

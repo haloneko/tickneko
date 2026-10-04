@@ -403,27 +403,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     [pushUndo],
   )
 
-  /** 切换开始节点的触发方式：time 补默认 cron、event 补默认事件类型；其余把不相关的清掉。 */
-  const setStartTrigger = useCallback(
-    (id: string, trigger: string) => {
-      pushUndo()
-      setGraph((g) => ({
-        ...g,
-        nodes: g.nodes.map((n) => {
-          if (n.id !== id || n.type !== 'start') return n
-          const config: Record<string, unknown> = { ...n.config, trigger }
-          if (trigger === 'time' && typeof config.cron !== 'string') config.cron = '*/5 * * * *'
-          // 事件触发：没填过就给「任何事件」（*），免得刚切过去就是一个校验不过的空值
-          if (trigger === 'event' && typeof config.event_type !== 'string') config.event_type = '*'
-          if (trigger !== 'time') delete config.cron
-          if (trigger !== 'event') delete config.event_type
-          return { ...n, config }
-        }),
-      }))
-    },
-    [pushUndo],
-  )
-
   // ---- 节点面板 ----
   /**
    * 节点库选项按下：拖进画布 → 虚影跟随、松手落子；没拖（纯点击）→ 和以前一样直接添加。
@@ -1167,7 +1146,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             report={report}
             versions={versions}
             onUpdate={updateConfig}
-            onSetStartTrigger={setStartTrigger}
             onDelete={deleteNode}
           />
         )}

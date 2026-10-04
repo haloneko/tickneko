@@ -4,7 +4,7 @@
       base.py            契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / 运行时上下文
       port_types.py      端口类型定义表（唯一常改的地方：画布配色 / 图例 / 数据流语义都从它来）
       registry.py        注册表：register_node / declare_node_type / get_spec / load_node_modules
-      start.py           内置节点：start（图起点；trigger=time 时按 cron 登记调度器）
+      triggers.py        内置节点：三个触发器（trigger-message 消息 / trigger-time 定时 / trigger-event 事件）
       end.py             内置节点：end（图终点）
       log.py             内置节点：log（按级别写业务日志）
       test.py            内置节点：test（调试：回显入口的值到日志，画布联调用）
@@ -97,13 +97,17 @@ from .registry import (
     register_node,
     registered_types,
 )
-from .start import (
-    START_TRIGGERS,
-    exec_start,
-    validate_start_node,
+from .test import exec_test
+from .triggers import (
+    EVENT_TYPE_OPTIONS,
+    EVENT_TYPES,
+    exec_trigger_event,
+    exec_trigger_message,
+    exec_trigger_time,
+    validate_event_type,
+    validate_time_cron,
     workflow_task_id,
 )
-from .test import exec_test
 
 __all__ = [
     # 契约（写节点用这些）
@@ -134,10 +138,14 @@ __all__ = [
     "registered_types",
     "load_node_modules",
     # 内置节点：import 上面那些模块即完成注册，函数本身也导出（复用 / 测试 / 换实现）
-    "exec_start",
+    "exec_trigger_message",
+    "exec_trigger_time",
+    "exec_trigger_event",
     "exec_ai_service",
-    "validate_start_node",
-    "START_TRIGGERS",
+    "validate_time_cron",
+    "validate_event_type",
+    "EVENT_TYPE_OPTIONS",
+    "EVENT_TYPES",
     "workflow_task_id",
     "exec_end",
     "exec_log",

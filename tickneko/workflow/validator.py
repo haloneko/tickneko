@@ -184,10 +184,25 @@ def _structure_stage(raw: dict[str, Any] | WorkflowGraph) -> tuple[WorkflowGraph
                     node_id=node.id,
                     code="UNKNOWN_NODE_TYPE",
                     message=f"节点 {node.id} 的类型 {node.type!r} 未注册",
-                    suggestion=f"已注册类型：{', '.join(registered_types())}",
+                    suggestion=_renamed_node_hint(node.type)
+                    or f"已注册类型：{', '.join(registered_types())}",
                 )
             )
     return (graph if not errors else None), errors
+
+
+#: 拆过 / 改过名的旧类型 -> 换成什么（老图报错时直接指路，别让人对着「未注册」猜）
+_RENAMED_NODE_TYPES: dict[str, str] = {
+    "start": (
+        "start 已拆成三个触发器：trigger-message（消息触发）/ trigger-time（定时触发）"
+        "/ trigger-event（事件触发）—— 按原来 config.trigger 的取值换成对应那个"
+    ),
+}
+
+
+def _renamed_node_hint(node_type: str) -> str:
+    """旧类型换名提示；不是换过的类型返回空串（调用方退到「已注册类型」兜底）。"""
+    return _RENAMED_NODE_TYPES.get(node_type, "")
 
 
 def _parse_graph(raw: Any) -> tuple[WorkflowGraph | None, list[ValidationIssue]]:

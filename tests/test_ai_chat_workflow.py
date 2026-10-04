@@ -53,7 +53,7 @@ def test_optional_user_filter(monkeypatch, user, should_call):
 def test_regular_workflow_without_ai_node_never_calls_ai(monkeypatch):
     calls = http_stub(monkeypatch)
     graph = WorkflowGraph.model_validate({"nodes": [
-        {"id": "start", "type": "start", "config": {"trigger": "message"}},
+        {"id": "start", "type": "trigger-message", "config": {"trigger": "message"}},
         {"id": "send", "type": "send", "config": {"message": "普通工作流"}},
         {"id": "end", "type": "end"},
     ], "edges": [

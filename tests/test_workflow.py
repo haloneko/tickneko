@@ -100,7 +100,7 @@ def edge(
 
 def linear_graph() -> dict[str, object]:
     """一张各阶段都该过的最小线性图：start -> end。"""
-    return {"nodes": [node("s", "start"), node("e", "end")], "edges": [edge("s", "e")]}
+    return {"nodes": [node("s", "trigger-message"), node("e", "end")], "edges": [edge("s", "e")]}
 
 
 # --------------------------------------------------------------------------- 日志采集
@@ -181,7 +181,7 @@ def test_structure_rejects_unknown_type_and_missing_nodes() -> None:
 
 def test_structure_rejects_duplicate_id_and_dangling_edge() -> None:
     graph = {
-        "nodes": [node("s", "start"), node("s", "end")],
+        "nodes": [node("s", "trigger-message"), node("s", "end")],
         "edges": [edge("s", "ghost")],
     }
     report = validate_graph(graph)
@@ -194,7 +194,7 @@ def test_structure_rejects_duplicate_id_and_dangling_edge() -> None:
 def test_structure_short_circuits_topology() -> None:
     """结构没过时不跑拓扑：两个 start 也不应该报 START_NOT_UNIQUE（短路）。"""
     graph = {
-        "nodes": [node("s1", "start"), node("s2", "start"), node("e", "end")],
+        "nodes": [node("s1", "trigger-message"), node("s2", "trigger-message"), node("e", "end")],
         "edges": [edge("s1", "ghost")],
     }
     report = validate_graph(graph)
@@ -209,7 +209,7 @@ def test_topology_start_and_end_counts() -> None:
     assert not report.valid and report.stage == STAGE_TOPOLOGY
     assert {issue.code for issue in report.errors} == {"START_NOT_UNIQUE"}
 
-    no_end = {"nodes": [node("s", "start")], "edges": []}
+    no_end = {"nodes": [node("s", "trigger-message")], "edges": []}
     codes = {issue.code for issue in validate_graph(no_end).errors}
     assert "END_MISSING" in codes
 
@@ -217,7 +217,7 @@ def test_topology_start_and_end_counts() -> None:
 def test_topology_detects_cycle() -> None:
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("a", "test"),
             node("b", "test"),
             node("e", "end"),
@@ -232,7 +232,7 @@ def test_topology_detects_cycle() -> None:
 def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None:
     """孤儿节点（不可达）及其自环 / 环 / 缺配置一律放行；主路径上的自环仍要拦。"""
     with_orphan = {
-        "nodes": [node("s", "start"), node("e", "end"), node("lonely", "test")],
+        "nodes": [node("s", "trigger-message"), node("e", "end"), node("lonely", "test")],
         "edges": [edge("s", "e"), edge("lonely", "lonely")],
     }
     assert validate_graph(with_orphan).valid  # 孤儿自环不影响主流程
@@ -240,7 +240,7 @@ def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None
     # 孤儿组件内部成环 + 是个没配 url 的 http：照样允许保存
     orphan_mess = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("e", "end"),
             node("o1", "http"),  # 缺必填 url/method，但不可达
             node("o2", "test"),
@@ -255,14 +255,14 @@ def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None
 
     # 未注册类型的孤儿也放行（插件没装 / 先画了再说）
     orphan_unknown = {
-        "nodes": [node("s", "start"), node("e", "end"), node("x", "火星节点")],
+        "nodes": [node("s", "trigger-message"), node("e", "end"), node("x", "火星节点")],
         "edges": [edge("s", "e")],
     }
     assert validate_graph(orphan_unknown).valid
 
     # 主路径自环仍报错
     main_self_loop = {
-        "nodes": [node("s", "start"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [edge("s", "e"), edge("s", "s")],
     }
     codes = {issue.code for issue in validate_graph(main_self_loop).errors}
@@ -272,7 +272,7 @@ def test_topology_allows_orphans_but_still_rejects_main_path_self_loop() -> None
 def test_topology_end_must_be_reachable_from_start() -> None:
     """end 存在但没接进主流程（另一个孤儿）不算数，报 END_MISSING。"""
     graph = {
-        "nodes": [node("s", "start"), node("e", "end"), node("x", "test")],
+        "nodes": [node("s", "trigger-message"), node("e", "end"), node("x", "test")],
         "edges": [edge("s", "x")],  # end 孤立
     }
     codes = {issue.code for issue in validate_graph(graph).errors}
@@ -283,7 +283,7 @@ def test_topology_min_outgoing_comes_from_registration() -> None:
     """出边下限由注册时声明（``min_outgoing``）：少了就报 GATEWAY_NEEDS_BRANCHES。"""
     declare_node_type("test-split", min_outgoing=2)
     graph = {
-        "nodes": [node("s", "start"), node("g", "test-split"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("g", "test-split"), node("e", "end")],
         "edges": [edge("s", "g"), edge("g", "e")],
     }
     report = validate_graph(graph)
@@ -298,7 +298,7 @@ def test_topology_min_outgoing_comes_from_registration() -> None:
 
 def test_topology_end_with_outgoing_rejected() -> None:
     graph = {
-        "nodes": [node("s", "start"), node("e", "end"), node("x", "log", message="hi")],
+        "nodes": [node("s", "trigger-message"), node("e", "end"), node("x", "log", message="hi")],
         "edges": [edge("s", "e"), edge("e", "x")],
     }
     codes = {issue.code for issue in validate_graph(graph).errors}
@@ -314,7 +314,7 @@ def test_semantic_missing_required_config() -> None:
     """
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("call", "http"),  # url 入口没接线也没填
             node("note", "log"),  # message 入口没接线也没填
             node("c", "constant"),  # value 必填、没有默认值
@@ -338,7 +338,7 @@ def test_semantic_missing_required_config() -> None:
 def test_semantic_checks_edge_ports() -> None:
     """连线就是数据契约：端口名写错 / 两端类型不配，都在语义阶段拦住。"""
     typo = {
-        "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("l", "log"), node("e", "end")],
         "edges": [
             edge("s", "l"),
             edge("l", "e"),
@@ -352,7 +352,7 @@ def test_semantic_checks_edge_ports() -> None:
     assert "message" in unknown.suggestion  # 拼错时给「是否想用」
 
     mismatch = {
-        "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("l", "log"), node("e", "end")],
         "edges": [edge("s", "l"), edge("l", "e"), edge("s", "l", "trigger", "message")],
     }
     codes = {issue.code for issue in validate_graph(mismatch).errors}
@@ -364,7 +364,7 @@ def test_semantic_generic_port_connects_any_data_port_not_trigger() -> None:
     # 泛型 -> 会话定位（send 的 target 入口）：透传口接数据流端口，放行
     ok = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("p", "placeholder"),
             node("d", "send", message="hi"),  # target 接线、message 手填，都不缺
             node("e", "end"),
@@ -381,7 +381,7 @@ def test_semantic_generic_port_connects_any_data_port_not_trigger() -> None:
     # 泛型 -> 触发：泛型只走数据流，接触发端口报 PORT_TYPE_MISMATCH
     bad = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("p", "placeholder"),
             node("l", "log"),
             node("e", "end"),
@@ -398,7 +398,7 @@ def test_semantic_generic_port_connects_any_data_port_not_trigger() -> None:
     # 泛型 -> 泛型（占位 -> 占位）：同为数据流，放行
     through = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("p1", "placeholder"),
             node("p2", "placeholder"),
             node("e", "end"),
@@ -416,7 +416,7 @@ def test_semantic_one_data_input_takes_one_edge() -> None:
     """一个数据入口只允许接一条线（要合并就先汇到一个节点再往下送）。"""
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("c", "constant", value="a"),
             node("l", "log"),
             node("e", "end"),
@@ -464,7 +464,7 @@ def test_semantic_trigger_ports_allow_convergence() -> None:
     """
     diamond = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("a", "test", message="A"),
             node("b", "test", message="B"),
             node("e", "end"),
@@ -480,7 +480,7 @@ def test_semantic_trigger_ports_allow_convergence() -> None:
 
     dup_data = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("t", "test", message="x"),
             node("l", "log"),
             node("e", "end"),
@@ -500,7 +500,7 @@ def test_semantic_wired_data_input_passes() -> None:
     """数据入口接上上游的输出端口（类型也对得上）就通过 —— 不需要在 config 里填值。"""
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("c", "constant", value="https://api.example.com"),
             node("call", "http", method="POST"),
             node("note", "log"),
@@ -520,7 +520,7 @@ def test_semantic_wired_data_input_passes() -> None:
 def test_semantic_start_time_trigger_requires_cron_and_validates_it() -> None:
     """start 选时间触发：缺 cron 报 MISSING_CONFIG，cron 非法报 INVALID_CRON；消息触发免配置。"""
     g_missing = {
-        "nodes": [node("s", "start", trigger="time"), node("e", "end")],
+        "nodes": [node("s", "trigger-time"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     report = validate_graph(g_missing)
@@ -528,7 +528,7 @@ def test_semantic_start_time_trigger_requires_cron_and_validates_it() -> None:
     assert any(e.code == "MISSING_CONFIG" for e in report.errors)
 
     g_bad = {
-        "nodes": [node("s", "start", trigger="time", cron="not a cron"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="not a cron"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     report = validate_graph(g_bad)
@@ -536,23 +536,24 @@ def test_semantic_start_time_trigger_requires_cron_and_validates_it() -> None:
     assert any(e.code == "INVALID_CRON" for e in report.errors)
 
     g_good = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     assert validate_graph(g_good).valid
 
-    # trigger 非法值
-    g_bad_trigger = {
-        "nodes": [node("s", "start", trigger="webhook"), node("e", "end")],
+    # 老的 start 节点（触发器拆分前的写法）：类型未注册要拦下，并提示换成哪个触发器
+    g_legacy = {
+        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
-    report = validate_graph(g_bad_trigger)
+    report = validate_graph(g_legacy)
     assert not report.valid
-    assert any(e.code == "INVALID_TRIGGER" for e in report.errors)
+    legacy = next(e for e in report.errors if e.code == "UNKNOWN_NODE_TYPE")
+    assert "trigger-message" in legacy.suggestion  # 报错里直接指路换哪个
 
     # 消息触发（含完全不配 trigger 的旧 start）无需任何配置
     g_message = {
-        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     assert validate_graph(g_message).valid
@@ -562,7 +563,7 @@ def test_semantic_start_time_trigger_requires_cron_and_validates_it() -> None:
 def test_semantic_log_requires_message_and_validates_level() -> None:
     """log 的 message 入口没接线也没手填 → INPUT_NOT_CONNECTED；level 非法 → INVALID_LOG_LEVEL。"""
     g_missing = {
-        "nodes": [node("s", "start"), node("l", "log"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("l", "log"), node("e", "end")],
         "edges": [edge("s", "l"), edge("l", "e")],
     }
     report = validate_graph(g_missing)
@@ -570,7 +571,7 @@ def test_semantic_log_requires_message_and_validates_level() -> None:
     assert any(e.code == "INPUT_NOT_CONNECTED" for e in report.errors)
 
     g_bad_level = {
-        "nodes": [node("s", "start"), node("l", "log", message="hi", level="TRACE"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("l", "log", message="hi", level="TRACE"), node("e", "end")],
         "edges": [edge("s", "l"), edge("l", "e")],
     }
     report = validate_graph(g_bad_level)
@@ -578,7 +579,7 @@ def test_semantic_log_requires_message_and_validates_level() -> None:
     assert any(e.code == "INVALID_LOG_LEVEL" for e in report.errors)
 
     g_good = {
-        "nodes": [node("s", "start"), node("l", "log", message="hi", level="WARNING"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("l", "log", message="hi", level="WARNING"), node("e", "end")],
         "edges": [edge("s", "l"), edge("l", "e")],
     }
     assert validate_graph(g_good).valid
@@ -587,7 +588,7 @@ def test_semantic_log_requires_message_and_validates_level() -> None:
 def test_semantic_test_node_passes_without_config() -> None:
     """test 节点没有必填项：message 入口可选（没接线时用手填值，连键都没有才用节点 id）。"""
     g = {
-        "nodes": [node("s", "start"), node("t", "test"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("t", "test"), node("e", "end")],
         "edges": [edge("s", "t"), edge("t", "e")],
     }
     assert validate_graph(g).valid
@@ -618,7 +619,7 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
         return {}
 
     # 未接进主流程时什么都不查；接进主流程后规则全生效
-    base_nodes = [node("s", "start"), node("p", "reg-ping"), node("e", "end")]
+    base_nodes = [node("s", "trigger-message"), node("p", "reg-ping"), node("e", "end")]
 
     missing = {"nodes": base_nodes, "edges": [edge("s", "p"), edge("p", "e")]}
     report = validate_graph(missing)
@@ -629,7 +630,7 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
 
     bad_mode = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("p", "reg-ping", url="https://x", mode="weird"),
             node("e", "end"),
         ],
@@ -640,7 +641,7 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
 
     good = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("p", "reg-ping", url="https://x"),  # mode 缺，默认 sync，校验器放行
             node("e", "end"),
         ],
@@ -650,7 +651,7 @@ def test_validation_rules_are_driven_by_registration_not_validator_code() -> Non
 
     # 同类型作为孤儿：缺 url + mode 非法，照样通过
     orphan = {
-        "nodes": [node("s", "start"), node("e", "end"), node("p2", "reg-ping")],
+        "nodes": [node("s", "trigger-message"), node("e", "end"), node("p2", "reg-ping")],
         "edges": [edge("s", "e")],
     }
     assert validate_graph(orphan).valid
@@ -661,7 +662,7 @@ def test_apply_config_defaults_fills_registered_defaults() -> None:
     """保存版本前的默认值补全：trigger / level / method / message 缺失就填，给了值不覆盖。"""
     raw = {
         "nodes": [
-            node("s", "start"),  # trigger 缺
+            node("s", "trigger-message"),  # trigger 缺
             node("l", "log", message="hi"),  # level 缺
             node("h", "http", url="https://x", timeout=3),  # method 缺、timeout 给了
             node("t", "test"),  # message 缺
@@ -671,7 +672,8 @@ def test_apply_config_defaults_fills_registered_defaults() -> None:
     }
     graph = apply_config_defaults(raw)
     configs = {n.id: n.config for n in graph.nodes}
-    assert configs["s"]["trigger"] == "message"
+    # 消息触发器没有配置字段（默认值也就无从补起）
+    assert configs["s"] == {}
     assert configs["l"]["level"] == "INFO"
     assert configs["h"]["method"] == "GET"  # 画布一直替它填 GET，现在后端也这么声明
     assert configs["h"]["timeout"] == 3  # 显式值不被覆盖
@@ -691,7 +693,7 @@ async def test_executor_start_end_log_test_run() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("t", "test", message="hello tickneko"),
                 node("l", "log", level="INFO"),
                 node("e", "end"),
@@ -728,7 +730,7 @@ async def test_executor_placeholder_relays_value_along_the_edge() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("p", "placeholder", value="透传我"),
                 node("l", "log", level="INFO"),
                 node("e", "end"),
@@ -759,7 +761,7 @@ async def test_executor_skips_orphan_nodes_entirely() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("e", "end"),
                 node("m", "orphan-marker"),  # 可达性外的有执行器孤儿：不该跑
                 node("ghost", "not-a-registered-type"),  # 没登记过（连规格都没）的孤儿
@@ -771,7 +773,7 @@ async def test_executor_skips_orphan_nodes_entirely() -> None:
     await SimpleWorkflowRunner().run(graph, ctx)  # 不因孤儿缺执行器而抛错
     assert ran == []  # 孤儿副作用没发生
     # 主流程照常跑完（start -> end），孤儿一点痕迹都没留下
-    assert any("[start]" in line for line in ctx.log)
+    assert any("[trigger-message]" in line for line in ctx.log)
     assert any("[end]" in line for line in ctx.log)
 
 
@@ -789,7 +791,7 @@ async def test_executor_orphan_edge_into_main_path_does_not_block() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("e", "end"),
                 node("o", "orphan-feeder"),  # 不可达，但有一条 o -> e 的入边
             ],
@@ -813,7 +815,7 @@ async def test_executor_ignores_data_edges_from_nodes_that_never_ran() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("l", "log", message="手填的内容"),
                 node("c", "constant", value="孤儿常量"),
                 node("e", "end"),
@@ -838,7 +840,7 @@ async def test_executor_still_sends_empty_for_wired_port_without_value() -> None
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start", trigger="time", cron="*/5 * * * *"),
+                node("s", "trigger-time", cron="*/5 * * * *"),
                 node("l", "log", message="手填的内容"),
                 node("e", "end"),
             ],
@@ -871,7 +873,7 @@ async def test_executor_start_time_trigger_registers_only_when_priming() -> None
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start", trigger="time", cron="*/5 * * * *", name="每5分钟"),
+                node("s", "trigger-time", cron="*/5 * * * *", name="每5分钟"),
                 node("e", "end"),
             ],
             "edges": [edge("s", "e")],
@@ -902,7 +904,7 @@ async def test_executor_start_time_trigger_leaves_scheduler_alone_while_running(
     scheduler = TaskManager()
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+            "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
             "edges": [edge("s", "e")],
         }
     )
@@ -930,7 +932,7 @@ async def test_executor_start_message_trigger_does_not_register() -> None:
     scheduler = TaskManager()
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+            "nodes": [node("s", "trigger-message"), node("e", "end")],
             "edges": [edge("s", "e")],
         }
     )
@@ -984,7 +986,7 @@ async def test_executor_start_time_trigger_without_scheduler_skips_gracefully() 
     """登记那一趟没注入调度器时（离线 / 测试）：只记一条 warning，不抛异常。"""
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+            "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
             "edges": [edge("s", "e")],
         }
     )
@@ -998,7 +1000,7 @@ async def test_executor_start_time_trigger_running_pass_needs_no_scheduler() -> 
     """执行那一趟本来就不碰调度器：没注入也照跑，不该报「未注入调度器」。"""
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+            "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
             "edges": [edge("s", "e")],
         }
     )
@@ -1014,7 +1016,7 @@ async def test_executor_unsupported_node_type_raises() -> None:
     declare_node_type("test-noexec")
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start"), node("c", "test-noexec"), node("e", "end")],
+            "nodes": [node("s", "trigger-message"), node("c", "test-noexec"), node("e", "end")],
             "edges": [edge("s", "c"), edge("c", "e")],
         }
     )
@@ -1042,7 +1044,7 @@ async def test_executor_stops_downstream_on_node_failure() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("b", "boom"),
                 node("t", "failure-tail"),  # 失败节点的下游：不该跑
                 node("side", "log", message="别的分支"),  # 平行分支：照跑
@@ -1089,7 +1091,7 @@ async def test_branch_pruning_ignores_cross_branch_data_edges() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c", "condition", left="1", operator="==", right="2"),  # 1 == 2 -> false
                 node("on_true", "prune-mark-a"),
                 node("on_false", "prune-mark-b"),
@@ -1127,7 +1129,7 @@ async def test_node_with_only_data_edges_still_runs() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("d", "data-only"),
                 node("e", "end"),
             ],
@@ -1154,7 +1156,7 @@ async def test_executor_wraps_environment_error_with_node_context() -> None:
 
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start"), node("b", "boom-env"), node("e", "end")],
+            "nodes": [node("s", "trigger-message"), node("b", "boom-env"), node("e", "end")],
             "edges": [edge("s", "b"), edge("b", "e")],
         }
     )
@@ -1177,7 +1179,7 @@ async def test_executor_wrapped_error_survives_empty_message() -> None:
 
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start"), node("b", "boom-empty-msg"), node("e", "end")],
+            "nodes": [node("s", "trigger-message"), node("b", "boom-empty-msg"), node("e", "end")],
             "edges": [edge("s", "b"), edge("b", "e")],
         }
     )
@@ -1202,7 +1204,7 @@ async def test_executor_failed_node_produces_nothing_downstream() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("b", "boom2"),
                 node("l", "log", message="手填兜底"),
                 node("e", "end"),
@@ -1343,7 +1345,7 @@ async def test_http_status_reaches_downstream_message_input(
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("h", "http", url="https://api.example.com", method="GET"),
                 node("l", "log", level="WARNING"),
                 node("e", "end"),
@@ -1385,7 +1387,7 @@ async def test_http_error_status_skips_downstream_in_graph(
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("h", "http", url="https://api.example.com", method="GET"),
                 node("l", "log", message="手填兜底"),
                 node("e", "end"),
@@ -1463,7 +1465,7 @@ def test_http_method_is_checked_at_validation() -> None:
     def graph_with(method: str) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("h", "http", url="https://api.example.com", method=method),
                 node("e", "end"),
             ],
@@ -1483,7 +1485,7 @@ async def test_constant_node_produces_one_value_on_its_port() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c", "constant", value="https://api.example.com"),
                 node("l", "log"),
                 node("e", "end"),
@@ -1506,7 +1508,7 @@ async def test_multiple_constants_are_multiple_nodes() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c1", "constant", value="第一"),
                 node("c2", "constant", value="第二"),
                 node("l1", "log", level="INFO"),
@@ -1532,7 +1534,7 @@ async def test_multiple_constants_are_multiple_nodes() -> None:
 def test_constant_value_is_required() -> None:
     """常量节点的 ``value`` 是必填字段：没写报 MISSING_CONFIG。"""
     graph = {
-        "nodes": [node("s", "start"), node("c", "constant"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("c", "constant"), node("e", "end")],
         "edges": [edge("s", "c"), edge("c", "e")],
     }
     report = validate_graph(graph)
@@ -1543,7 +1545,7 @@ def test_constant_value_is_required() -> None:
 def test_constant_must_be_wired_to_be_read() -> None:
     """值只能沿边走：常量接到下游才读得到；常量成了孤儿，下游那个入口就是空的。"""
     nodes = [
-        node("s", "start"),
+        node("s", "trigger-message"),
         node("c", "constant", value="https://api.example.com"),
         node("l", "log"),
         node("e", "end"),
@@ -1573,7 +1575,7 @@ async def test_executor_delay_waits_then_passes_control() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("d", "delay", seconds=0.05),
                 node("l", "log", message="等到了"),
                 node("e", "end"),
@@ -1600,7 +1602,7 @@ async def test_executor_delay_zero_passes_through_without_waiting() -> None:
     """``seconds=0`` = 不等（临时把等待关掉）：照常往下走，只是不写「等待 N 秒」那行。"""
     graph = WorkflowGraph.model_validate(
         {
-            "nodes": [node("s", "start"), node("d", "delay", seconds=0), node("e", "end")],
+            "nodes": [node("s", "trigger-message"), node("d", "delay", seconds=0), node("e", "end")],
             "edges": [edge("s", "d"), edge("d", "e")],
         }
     )
@@ -1620,7 +1622,7 @@ async def test_executor_delay_takes_seconds_from_the_wire() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c", "constant", value="0.05"),
                 node("d", "delay", seconds=2),  # 手填的会被线上值覆盖
                 node("e", "end"),
@@ -1648,7 +1650,7 @@ async def test_executor_delay_rejects_bad_wired_seconds() -> None:
         return WorkflowGraph.model_validate(
             {
                 "nodes": [
-                    node("s", "start"),
+                    node("s", "trigger-message"),
                     node("c", "constant", value=value),
                     node("d", "delay", seconds=1),
                     node("e", "end"),
@@ -1674,7 +1676,7 @@ def test_delay_seconds_is_validated() -> None:
     def graph_with(seconds: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("d", "delay", seconds=seconds),
                 node("e", "end"),
             ],
@@ -1745,7 +1747,7 @@ def test_json_fields_are_validated() -> None:
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("j", "json", **config),
                 node("e", "end"),
             ],
@@ -1819,7 +1821,7 @@ def test_regex_fields_are_validated() -> None:
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("r", "regex", **config),
                 node("e", "end"),
             ],
@@ -1868,7 +1870,7 @@ async def test_condition_picks_branch_and_engine_prunes_skipped_side() -> None:
     def branch_graph(left: str, operator: str, right: str) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c", "condition", left=left, operator=operator, right=right),
                 node("yes", "log", message="true 分支"),
                 node("no", "log", message="false 分支"),
@@ -1919,7 +1921,7 @@ async def test_skipping_a_branching_node_cascades_to_its_downstream() -> None:
     def outer_graph(right: str) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c1", "condition", left="1", operator="==", right=right),
                 node("c2", "condition", left="1", operator="==", right="1"),
                 node("hit", "log", message="内层下面"),
@@ -2000,7 +2002,7 @@ def test_condition_fields_are_validated() -> None:
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c", "condition", **config),
                 node("e", "end"),
             ],
@@ -2022,7 +2024,7 @@ def test_condition_fields_are_validated() -> None:
     report = validate_graph(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("c", "condition", left="x"),
                 node("e", "end"),
             ],
@@ -2250,7 +2252,7 @@ def test_send_requires_a_target_source() -> None:
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("snd", "send", **config),
                 node("e", "end"),
             ],
@@ -2376,7 +2378,7 @@ def test_unpack_requires_a_target_source() -> None:
     """target 是 unpack 的必填入口：没接线也没手填，语义阶段报 INPUT_NOT_CONNECTED。"""
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("u", "unpack-onebot"),
             node("e", "end"),
         ],
@@ -2506,7 +2508,7 @@ async def test_operator_failure_in_graph_skips_downstream() -> None:
     graph = WorkflowGraph.model_validate(
         {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("m", "operator", operator="+", left="当前时间为：", right="1"),
                 node("l", "log", message="手填兜底"),  # 内容入口接了 operator（算不出来）
                 node("e", "end"),
@@ -2533,7 +2535,7 @@ def test_operator_symbol_is_validated() -> None:
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("m", "operator", **config),
                 node("e", "end"),
             ],
@@ -2672,7 +2674,7 @@ def test_cache_fields_are_validated() -> None:
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
-                node("s", "start"),
+                node("s", "trigger-message"),
                 node("ca", "cache", **config),
                 node("e", "end"),
             ],
@@ -2699,12 +2701,12 @@ def test_cache_fields_are_validated() -> None:
 def test_builtin_node_executors_are_registered() -> None:
     """包一被 import，内置节点的执行函数就都登记好了（一类一个文件，各自注册）。"""
     for node_type in (
-        "start", "end", "log", "test", "http", "constant", "delay",
+        "trigger-message", "trigger-time", "trigger-event", "end", "log", "test", "http", "constant", "delay",
         "json", "regex", "now", "condition", "operator", "cache", "placeholder",
     ):
         assert get_executor(node_type) is not None
     assert set(registered_types()) >= {
-        "start", "end", "log", "test", "http", "constant", "delay",
+        "trigger-message", "trigger-time", "trigger-event", "end", "log", "test", "http", "constant", "delay",
         "json", "regex", "now", "condition", "operator", "cache", "placeholder",
     }
 
@@ -2732,17 +2734,22 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
     assert level.default == "INFO"
     assert level.options == ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
-    start = get_spec("start")
-    assert start is not None
-    start_fields = {f.name: f for f in start.fields}
-    from tickneko.workflow.nodes.start import EVENT_TYPE_OPTIONS
+    from tickneko.workflow.nodes.triggers import EVENT_TYPE_OPTIONS
 
-    assert start_fields["trigger"].default == "message"
-    assert start_fields["trigger"].options == ("message", "time", "event")
-    assert "cron" in start_fields  # 时间形态用到的字段也照实声明
-    assert "name" in start_fields
-    # 事件形态：订阅哪种事件也是后端声明的下拉（画布不再自己抄一份事件类型）
-    assert start_fields["event_type"].options == EVENT_TYPE_OPTIONS
+    # 触发器拆成三个：各带自己那份配置（定时看 cron、事件看事件类型、消息什么都不用配）
+    message = get_spec("trigger-message")
+    assert message is not None
+    assert [f.name for f in message.fields] == []
+
+    time_trigger = get_spec("trigger-time")
+    assert time_trigger is not None
+    assert [f.name for f in time_trigger.fields] == ["cron", "name"]
+
+    event_trigger = get_spec("trigger-event")
+    assert event_trigger is not None
+    assert [f.name for f in event_trigger.fields] == ["event_type"]
+    # 订阅哪种事件也是后端声明的下拉（画布不再自己抄一份事件类型）
+    assert event_trigger.fields[0].options == EVENT_TYPE_OPTIONS
     assert "*" in EVENT_TYPE_OPTIONS  # 通配：任何事件都触发
 
     test = get_spec("test")
@@ -2761,12 +2768,14 @@ def test_builtin_node_ports_and_labels_are_declared() -> None:
     from tickneko.workflow import get_spec
 
     expected: dict[str, tuple[int, str, list[str], list[str]]] = {
-        # start 声明的是**全量**端口（消息形态 + 事件形态），画布按 config.trigger 挑着显示
-        "start": (
-            10,
-            "开始",
+        # 三个触发器各是一种节点类型（形状固定，画布不用再按 config 挑端口）
+        "trigger-message": (10, "消息触发", [], ["trigger", "message", "target"]),
+        "trigger-time": (11, "定时触发", [], ["trigger"]),
+        "trigger-event": (
+            12,
+            "事件触发",
             [],
-            ["trigger", "message", "target", "event_type", "user_id", "chat", "chat_id", "text"],
+            ["trigger", "event_type", "user_id", "chat", "chat_id", "text", "target"],
         ),
         "end": (20, "结束", ["trigger"], []),
         "constant": (30, "常量", ["trigger"], ["trigger", "value"]),
@@ -2906,7 +2915,7 @@ def test_declare_node_type_gives_rules_without_executor() -> None:
     # 出边给够（两条），好让流水线走到语义阶段去查必填字段
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("a", "test-declared"),
             node("e", "end"),
             node("e2", "end"),
@@ -2958,7 +2967,7 @@ async def test_custom_node_type_runs_end_to_end() -> None:
 
     graph = WorkflowGraph(
         nodes=[
-            WorkflowNode(id="s", type="start", config={}),
+            WorkflowNode(id="s", type="trigger-message", config={}),
             WorkflowNode(id="c", type="constant", config={"value": "hi tickneko"}),
             WorkflowNode(id="u", type="my-upper", config={}),
         ],
@@ -2983,21 +2992,21 @@ def test_checksum_stable_under_key_order_and_spacing() -> None:
     reordered = {"edges": [
         {"targetPort": "trigger", "target": "e", "sourcePort": "trigger", "source": "s"},
     ], "nodes": [
-        {"config": {}, "type": "start", "id": "s"},
+        {"config": {}, "type": "trigger-message", "id": "s"},
         {"config": {}, "type": "end", "id": "e"},
     ]}
     assert graph_checksum(reordered) == graph_checksum(linear_graph())
-    changed = {"nodes": [node("s", "start"), node("e2", "end")], "edges": [edge("s", "e2")]}
+    changed = {"nodes": [node("s", "trigger-message"), node("e2", "end")], "edges": [edge("s", "e2")]}
     assert graph_checksum(changed) != graph_checksum(linear_graph())
     assert json_loads(first)["nodes"][0]["id"] == "s"
 
 
 def test_checksum_ignores_node_positions_but_snapshot_keeps_them() -> None:
     """挪动节点坐标不改变摘要（不产生新版本），但规范快照里坐标仍然保留。"""
-    base = {"nodes": [node("s", "start"), node("e", "end")], "edges": [edge("s", "e")]}
+    base = {"nodes": [node("s", "trigger-message"), node("e", "end")], "edges": [edge("s", "e")]}
     moved: dict[str, object] = {
         "nodes": [
-            {**node("s", "start"), "x": 120, "y": 240},
+            {**node("s", "trigger-message"), "x": 120, "y": 240},
             {**node("e", "end"), "x": 480, "y": 96},
         ],
         "edges": [edge("s", "e")],
@@ -3010,7 +3019,7 @@ def test_checksum_ignores_node_positions_but_snapshot_keeps_them() -> None:
     # 再挪一次：摘要依旧相同（坐标字段不进 hash）
     moved_again = {
         "nodes": [
-            {**node("s", "start"), "x": 1, "y": 1},
+            {**node("s", "trigger-message"), "x": 1, "y": 1},
             node("e", "end"),
         ],
         "edges": [edge("s", "e")],
@@ -3021,12 +3030,12 @@ def test_checksum_ignores_node_positions_but_snapshot_keeps_them() -> None:
 def test_edge_ports_round_trip_and_affect_checksum() -> None:
     """边的端口字段（驼峰 / 下划线两种写法）都能解析，且属于图内容、参与摘要。"""
     camel = {
-        "nodes": [node("s", "start"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [{"source": "s", "target": "e", "sourcePort": "trigger",
                    "targetPort": "trigger"}],
     }
     snake = {
-        "nodes": [node("s", "start"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [{"source": "s", "target": "e", "source_port": "trigger",
                    "target_port": "trigger"}],
     }
@@ -3038,7 +3047,7 @@ def test_edge_ports_round_trip_and_affect_checksum() -> None:
 
     # 端口是图内容的一部分：同样的连线、没写端口，摘要就不同（缺省端口只影响运行期口径）
     no_ports = {
-        "nodes": [node("s", "start"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [{"source": "s", "target": "e"}],
     }
     assert graph_checksum(camel_g) != graph_checksum(no_ports)
@@ -3131,7 +3140,7 @@ async def test_store_version_increment_dedup_and_publish(
     assert pointed_again is not None and pointed_again.current_ref == "version"
 
     # 改了：新版本 2，定义指针跟着挪
-    graph_v2 = {"nodes": [node("s", "start"), node("m", "test"), node("e", "end")],
+    graph_v2 = {"nodes": [node("s", "trigger-message"), node("m", "test"), node("e", "end")],
                 "edges": [edge("s", "m"), edge("m", "e")]}
     second, created_second = await store.add_version(
         definition,
@@ -3180,7 +3189,7 @@ async def test_store_draft_save_overwrites_and_switches_pointer(
     assert definition.draft_graph_json == "" and definition.draft_updated_at == 0.0
 
     # 半张图也能暂存（不校验）
-    half = {"nodes": [{"id": "s", "type": "start"}], "edges": []}
+    half = {"nodes": [{"id": "s", "type": "trigger-message"}], "edges": []}
     saved = await store.save_draft(definition.id, canonical_draft_json(half))
     assert saved is not None and saved.current_ref == "draft"
     draft = saved.draft_graph()
@@ -3417,7 +3426,9 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     # 语义分类：画布面板按它分组 —— 目录的 categories 从节点注册**自动收集**：
     # 集合 = 所有节点的分类，顺序 = 面板顺序（按 order 排序后首次出现的顺序去重），
     # 显示名来自后端 CATEGORY_LABELS（查不到用机器名兜底）。面板不再维护白名单。
-    assert nodes["start"]["category"] == "trigger"
+    # 三个触发器都归「触发」分类（面板里同一组）
+    for trigger_type in ("trigger-message", "trigger-time", "trigger-event"):
+        assert nodes[trigger_type]["category"] == "trigger"
     assert nodes["end"]["category"] == "end"
     assert nodes["constant"]["category"] == "constant"
     assert nodes["send"]["category"] == "action"
@@ -3586,7 +3597,7 @@ async def test_api_create_validate_save_publish_full_chain() -> None:
         rejected = await client.post(
             f"/api/workflows/{workflow_id}/versions",
             headers=auth(token),
-            json={"graph": {"nodes": [node("s", "start")]}},  # 没 end
+            json={"graph": {"nodes": [node("s", "trigger-message")]}},  # 没 end
         )
         assert rejected.status_code == 200
         assert rejected.json()["data"]["valid"] is False
@@ -3647,7 +3658,7 @@ async def test_api_draft_stage_then_commit_then_publish() -> None:
             .json()["data"]["current_ref"] == "draft"
 
         # 半张图（只有 start、带坐标）也能暂存，不校验；坐标原样回来
-        half = {"nodes": [{"id": "s", "type": "start", "x": 12.5, "y": 34}], "edges": []}
+        half = {"nodes": [{"id": "s", "type": "trigger-message", "x": 12.5, "y": 34}], "edges": []}
         put = await client.put(
             f"/api/workflows/{workflow_id}/draft",
             headers=auth(token),
@@ -3673,7 +3684,7 @@ async def test_api_draft_stage_then_commit_then_publish() -> None:
 
         # 提交合法版本后：指针切到 version
         graph_with_ports = {
-            "nodes": [node("s", "start"), node("e", "end")],
+            "nodes": [node("s", "trigger-message"), node("e", "end")],
             "edges": [{"source": "s", "target": "e", "sourcePort": "trigger",
                        "targetPort": "trigger"}],
         }
@@ -3724,7 +3735,7 @@ async def test_load_published_workflows_registers_crons() -> None:
     await store.ensure_schema()
 
     time_graph = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     published_def = await store.create("u-admin", "定时流")
@@ -3746,7 +3757,7 @@ async def test_load_published_workflows_registers_crons() -> None:
 
     # 发布过、但开关没拨开的：同样不登记（另起一个节点 id，免得和上面那个撞 task_id）
     off_graph = {
-        "nodes": [node("so", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("so", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("so", "e")],
     }
     off_def = await store.create("u-admin", "发了但不跑的流")
@@ -3783,7 +3794,7 @@ async def test_load_published_workflows_logs_what_it_loaded() -> None:
     await store.ensure_schema()
 
     graph = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     # 三条定义：发布 + 开（登记）、发布但开关关着（跳过）、只存了版本没发布（跳过）
@@ -3881,7 +3892,7 @@ async def test_load_published_workflows_pages_past_the_first_page() -> None:
         # 每条用各自的节点 id：任务名是 wf-<工作流 id>-<节点 id>，不该互相顶掉
         graph = {
             "nodes": [
-                node(f"s{i}", "start", trigger="time", cron="*/5 * * * *"),
+                node(f"s{i}", "trigger-time", cron="*/5 * * * *"),
                 node("e", "end"),
             ],
             "edges": [edge(f"s{i}", "e")],
@@ -3919,7 +3930,7 @@ async def test_load_published_workflows_passes_the_instance_strategy_to_the_sche
     await store.ensure_schema()
 
     graph = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     plain = await store.create("u-admin", "单实例流")
@@ -3966,7 +3977,7 @@ async def test_load_published_workflows_registers_without_running_the_graph() ->
 
     graph = {
         "nodes": [
-            node("s", "start", trigger="time", cron="*/5 * * * *"),
+            node("s", "trigger-time", cron="*/5 * * * *"),
             node("p", "probe"),
             node("e", "end"),
         ],
@@ -4003,7 +4014,7 @@ async def test_workflow_failure_log_has_stack_type_and_node() -> None:
     store = SqlWorkflowStore(engine)
     await store.ensure_schema()
     graph = {
-        "nodes": [node("s", "start"), node("b", "boom-env-log"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("b", "boom-env-log"), node("e", "end")],
         "edges": [edge("s", "b"), edge("b", "e")],
     }
     definition = await store.create("u-admin", "会炸的流")
@@ -4048,7 +4059,7 @@ async def test_expected_environment_failure_logs_one_line(
     await store.ensure_schema()
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("h", "http", url="https://v1.hitokoto.cn/", method="GET", timeout=20),
             node("e", "end"),
         ],
@@ -4091,7 +4102,7 @@ async def test_make_trigger_injects_gateway_into_the_workflow_context() -> None:
 
     graph = {
         "nodes": [
-            node("s", "start"),
+            node("s", "trigger-message"),
             node("t", "pack-onebot", chat="private", chat_id="10001"),
             node("snd", "send", message="到点提醒"),
             node("e", "end"),
@@ -4140,7 +4151,7 @@ async def test_registered_cron_carries_gateway_through_to_the_connection() -> No
 
     graph = {
         "nodes": [
-            node("s", "start", trigger="time", cron="*/5 * * * *"),
+            node("s", "trigger-time", cron="*/5 * * * *"),
             node("t", "pack-onebot", chat="group", chat_id="9"),
             node("snd", "send", message="到点了"),
             node("e", "end"),
@@ -4195,7 +4206,7 @@ async def test_stop_published_workflow_removes_the_registered_tasks() -> None:
     await store.ensure_schema()
 
     graph = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     definition = await store.create("u-admin", "定时流")
@@ -4234,7 +4245,7 @@ async def test_workflow_task_ids_carry_the_workflow_id() -> None:
     await store.ensure_schema()
 
     graph = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     first = await store.create("u-admin", "第一条")
@@ -4274,7 +4285,7 @@ async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None
 
     graph = {
         "nodes": [
-            node("s", "start", trigger="message"),
+            node("s", "trigger-message"),
             node("l", "log", level="INFO"),
             node("e", "end"),
         ],
@@ -4305,30 +4316,30 @@ async def test_run_published_workflow_injects_trigger_data_and_user_id() -> None
         await engine.dispose()
 
 
-async def test_start_node_passes_target_through_to_downstream() -> None:
-    """start 把装配层放进 trigger_data 的会话定位（ChatTarget）原样透出 target 出口。
+async def test_message_trigger_passes_target_through_to_downstream() -> None:
+    """消息触发器把装配层放进 trigger_data 的会话定位（ChatTarget）原样透出 target 出口。
 
-    target 出口是**数据流**：start 把它送下去，下游节点（send 节点）拿到同一个
-    对象直接可用。没装配（定时触发 / 离线跑 / 没造事件）就 None，由下游自己处理分支。
+    target 出口是**数据流**：它把它送下去，下游节点（send 节点）拿到同一个
+    对象直接可用。没装配（离线跑 / 没造事件）就 None，由下游自己处理分支。
     """
     from tickneko.workflow import WorkflowNode
-    from tickneko.workflow.nodes.start import exec_start
+    from tickneko.workflow.nodes.triggers import exec_trigger_message
 
     class FakeTarget:  # 鸭子形状：workflow 只认「有 platform 的东西」，不 import bridge
         platform = "onebot"
 
-    start_node = WorkflowNode.model_validate({"id": "s", "type": "start", "config": {"trigger": "message"}})
+    start_node = WorkflowNode.model_validate({"id": "s", "type": "trigger-message", "config": {}})
     fake_target = FakeTarget()
     ctx = NodeExecutionContext()
     ctx.trigger_data = {"message": "你好", "target": fake_target}
-    outputs = await exec_start(start_node, ctx)
+    outputs = await exec_trigger_message(start_node, ctx)
     assert outputs["message"] == "你好"
     assert outputs["target"] is fake_target  # 同一个对象，原样透出
 
     # 没装配 target 时是 None，不炸
     empty = NodeExecutionContext()
     empty.trigger_data = {"message": "hi"}
-    assert (await exec_start(start_node, empty))["target"] is None
+    assert (await exec_trigger_message(start_node, empty))["target"] is None
 
 
 async def test_message_router_dispatches_by_owner_and_isolates_failures() -> None:
@@ -4399,7 +4410,7 @@ async def test_register_published_workflow_registers_message_trigger() -> None:
     await store.ensure_schema()
 
     graph = {
-        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     definition = await store.create("u-admin", "消息流")
@@ -4440,11 +4451,11 @@ async def test_load_published_workflows_registers_message_triggers() -> None:
     await store.ensure_schema()
 
     msg_graph = {
-        "nodes": [node("s", "start", trigger="message"), node("e", "end")],
+        "nodes": [node("s", "trigger-message"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     time_graph = {
-        "nodes": [node("s", "start", trigger="time", cron="*/5 * * * *"), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron="*/5 * * * *"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     msg = await store.create("u-admin", "消息流")
@@ -4572,7 +4583,7 @@ async def test_api_requires_login() -> None:
 def _timed_graph(cron: str = "*/5 * * * *") -> dict[str, object]:
     """一张最小的定时图（换 cron 就换 checksum，用来造第二个版本）。"""
     return {
-        "nodes": [node("s", "start", trigger="time", cron=cron), node("e", "end")],
+        "nodes": [node("s", "trigger-time", cron=cron), node("e", "end")],
         "edges": [edge("s", "e")],
     }
 
@@ -4787,30 +4798,57 @@ async def test_api_publishing_again_while_enabled_re_registers() -> None:
     ]
 
 
-# ------------------------------------------------------- 事件触发（trigger=event）
-def test_event_trigger_needs_a_known_event_type() -> None:
-    """trigger=event：event_type 必填且得是认得的事件类型；别的触发方式不管它。"""
-    from tickneko.workflow.nodes.start import validate_start_node
+# ------------------------------------------------------- 事件触发（trigger-event）
+def test_trigger_validators_check_their_own_config() -> None:
+    """三个触发器各查各的：定时看 cron、事件看事件类型；都对就通过。"""
+    from tickneko.workflow import get_spec
+    from tickneko.workflow.nodes.triggers import validate_event_type, validate_time_cron
 
-    missing = WorkflowNode(id="s", type="start", config={"trigger": "event"})
-    assert [i.code for i in validate_start_node(missing)] == ["MISSING_CONFIG"]
-
-    unknown = WorkflowNode(id="s", type="start", config={"trigger": "event", "event_type": "like"})
-    assert [i.code for i in validate_start_node(unknown)] == ["INVALID_EVENT_TYPE"]
-
-    ok = WorkflowNode(id="s", type="start", config={"trigger": "event", "event_type": "friend"})
-    assert validate_start_node(ok) == []
-    # 消息触发不查 event_type（填了也不管）
+    # 定时：cron 必填 + 得合法
+    assert [
+        i.code
+        for i in validate_time_cron(WorkflowNode(id="t", type="trigger-time", config={}))
+    ] == ["MISSING_CONFIG"]
+    assert [
+        i.code
+        for i in validate_time_cron(
+            WorkflowNode(id="t", type="trigger-time", config={"cron": "不是 cron"})
+        )
+    ] == ["INVALID_CRON"]
     assert (
-        validate_start_node(WorkflowNode(id="s", type="start", config={"trigger": "message"}))
+        validate_time_cron(
+            WorkflowNode(id="t", type="trigger-time", config={"cron": "*/5 * * * *"})
+        )
         == []
     )
 
+    # 事件：event_type 必填 + 得是认得的
+    assert [
+        i.code for i in validate_event_type(WorkflowNode(id="e", type="trigger-event", config={}))
+    ] == ["MISSING_CONFIG"]
+    assert [
+        i.code
+        for i in validate_event_type(
+            WorkflowNode(id="e", type="trigger-event", config={"event_type": "like"})
+        )
+    ] == ["INVALID_EVENT_TYPE"]
+    assert (
+        validate_event_type(
+            WorkflowNode(id="e", type="trigger-event", config={"event_type": "friend"})
+        )
+        == []
+    )
+
+    # 消息触发器没有必填配置：注册时没挂校验器，图校验也不会因为它报错
+    message = WorkflowNode(id="m", type="trigger-message", config={})
+    assert get_spec("trigger-message") is not None and get_spec("trigger-message").validator is None
+    assert message.config == {}
+
 
 @pytest.mark.asyncio
-async def test_start_node_emits_event_data() -> None:
+async def test_event_trigger_emits_event_data() -> None:
     """事件触发那一趟：事件类型 / 谁 / 哪个会话 / 事件带的文本，从出口送下去。"""
-    from tickneko.workflow.nodes.start import exec_start
+    from tickneko.workflow.nodes.triggers import exec_trigger_event
 
     ctx_ = NodeExecutionContext()
     ctx_.trigger_data = {
@@ -4821,8 +4859,8 @@ async def test_start_node_emits_event_data() -> None:
         "text": "加个好友",
         "target": None,
     }
-    out = await exec_start(
-        WorkflowNode(id="s", type="start", config={"trigger": "event", "event_type": "friend"}),
+    out = await exec_trigger_event(
+        WorkflowNode(id="s", type="trigger-event", config={"event_type": "friend"}),
         ctx_,
     )
     assert out["event_type"] == "friend"
@@ -4896,7 +4934,7 @@ async def test_event_graph_validates_and_carries_event_data_downstream() -> None
     """事件触发的图能过校验，并且事件数据（这里用 text）沿边送到下游节点。"""
     data = {
         "nodes": [
-            node("s", "start", trigger="event", event_type="friend"),
+            node("s", "trigger-event", event_type="friend"),
             node("t", "test"),
             node("e", "end"),
         ],
@@ -4930,7 +4968,7 @@ async def test_register_and_stop_event_trigger() -> None:
     store = SqlWorkflowStore(engine)
     await store.ensure_schema()
     graph = {
-        "nodes": [node("s", "start", trigger="event", event_type="friend"), node("e", "end")],
+        "nodes": [node("s", "trigger-event", event_type="friend"), node("e", "end")],
         "edges": [edge("s", "e")],
     }
     try:

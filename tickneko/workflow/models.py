@@ -188,7 +188,7 @@ class WorkflowDefinitionRecord(BaseModel):
     enabled: bool = False
     #: **实例策略**（设置弹窗里的「单实例 / 多实例」）：``False``（缺省，单实例）上一次还没
     #: 跑完、到点就跳过本次；``True``（多实例）到点就开新实例、允许叠加。登记定时触发时交给
-    #: 调度器（见 :func:`tickneko.workflow.nodes.start.exec_start`）。
+    #: 调度器（见 :func:`tickneko.workflow.nodes.triggers.exec_trigger_time`）。
     multi_instance: bool = False
     #: 暂存区图原文（规范 JSON 字符串）；从没暂存过是空串
     draft_graph_json: str = ""
