@@ -72,6 +72,7 @@ from .base import (
     input_value,
 )
 from .cache import exec_cache
+from .ai_service import exec_ai_service
 from .port_types import PORT_TYPES, PortType, PortTypeDef
 from .condition import exec_condition
 from .constant import exec_constant
@@ -134,6 +135,7 @@ __all__ = [
     "load_node_modules",
     # 内置节点：import 上面那些模块即完成注册，函数本身也导出（复用 / 测试 / 换实现）
     "exec_start",
+    "exec_ai_service",
     "validate_start_node",
     "START_TRIGGERS",
     "workflow_task_id",
