@@ -332,18 +332,6 @@ class NodeExecutionContext:
         )
         self._scheduler: TaskManager | None = scheduler
         self._run: Callable[[], Awaitable[None]] | None = run
-        # Explicit opt-in: running a graph is not the same as consuming a message.
-        self.message_consumed: bool = False
-        self.on_message_consumed: Callable[[], None] | None = None
-
-    def consume_message(self) -> None:
-        """Claim this message for the workflow without stopping its remaining nodes."""
-        if not self.trigger_data or self.register_triggers:
-            raise NodeFailure("接管消息节点只能用于消息触发的执行")
-        if not self.message_consumed:
-            self.message_consumed = True
-            if self.on_message_consumed is not None:
-                self.on_message_consumed()
 
     @property
     def logger(self) -> BaseLogger | BoundLogger:

@@ -59,7 +59,6 @@ from .api import (
 from .api.bots.protocols import BotsService
 from .api.onebot.protocols import OneBotLike
 from .api.workflow.protocols import WorkflowStoreLike, WorkflowTriggerLike
-from .api.messages import MessageDispatcher, router as messages_router
 from .services.auth import AuthService
 from .services.profile import AvatarStore, FileAvatarStore, ProfileService
 from .services.session import SessionService, SqlSessionStore
@@ -81,7 +80,6 @@ def create_app(
     bots: BotsService | None = None,
     workflow_store: WorkflowStoreLike | None = None,
     workflow_triggers: WorkflowTriggerLike | None = None,
-    message_dispatcher: MessageDispatcher | None = None,
     avatar_store: AvatarStore | None = None,
     title: str = "TickNeko",
     version: str = __version__,
@@ -215,7 +213,6 @@ def create_app(
     app.include_router(owners_router, prefix=chosen.prefix)
     app.include_router(log_router, prefix=chosen.prefix)
     app.include_router(workflow_router, prefix=chosen.prefix)
-    app.include_router(messages_router, prefix=chosen.prefix)
 
     # 依赖注入：服务在这一层建好挂上去（换存储 / 换算法只改这一处）
     app.state.auth_service = AuthService(
@@ -238,7 +235,6 @@ def create_app(
     app.state.workflow_store = workflows_store
     # 运行时触发器（可空）：拨运行开关时即时启停，没传就只落库
     app.state.workflow_triggers = workflow_triggers
-    app.state.message_dispatcher = message_dispatcher
     # 个人设置（改昵称 + 头像）：<prefix>/profile/* 用
     app.state.profile_service = profile_service
     return app

@@ -144,14 +144,12 @@ async def on_platform_event(event: PlatformEvent) -> None:
     if router is None:
         return  # 装配还没走到建路由（或没配消息触发）—— 不该发生，防御性放过
     try:
-        dispatch = router.dispatch_once if event.message_id else router.dispatch
-        await dispatch(
+        await router.dispatch(
             event.owner_id,
             trigger_data={
                 "message": event.text,
                 "user_id": event.user_id,
                 "platform": event.platform,
-                "self_id": event.self_id,
                 "chat": event.chat,
                 "chat_id": event.chat_id,
                 "message_id": event.message_id,
@@ -272,20 +270,6 @@ async def run(
 
     _gateway.subscribe(on_platform_event)
 
-    # HTTP and WS enter the SAME message router/receipt, regardless of arrival order.
-    # Keep platform target construction here rather than importing bridge in the API.
-    async def dispatch_admission(owner_id, body):
-        from .platforms.bridge.onebot import OneBotTarget
-
-        return await _message_router.dispatch_once(owner_id, trigger_data={
-            "message": body.message, "user_id": body.user_id, "platform": "onebot",
-            "self_id": body.self_id, "chat": body.chat, "chat_id": body.chat_id,
-            "message_id": body.message_id,
-            "target": OneBotTarget(owner_id=owner_id, chat=body.chat,
-                group_id=int(body.chat_id) if body.chat == "group" else None,
-                user_id=int(body.user_id), message_id=int(body.message_id)),
-        })
-
     # 接口层：建应用（注入同一个 db 上的三份存储 + OneBot 适配器）-> 起 uvicorn
     options = ApiOptions.from_mapping(api)
     _api_server = _NoSignalServer(
@@ -308,7 +292,6 @@ async def run(
                     message_router=_message_router,
                 ),
                 workflow_store=workflows,
-                message_dispatcher=dispatch_admission,
             ),
             host=api_host,
             port=api_port,

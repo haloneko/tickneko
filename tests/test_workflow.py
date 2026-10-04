@@ -4499,7 +4499,6 @@ async def test_on_platform_event_dispatches_message_to_router() -> None:
                     "message": "你好",
                     "user_id": "10001",
                     "platform": "onebot",
-                    "self_id": "",
                     "chat": "group",
                     "chat_id": "123",
                     "message_id": "42",

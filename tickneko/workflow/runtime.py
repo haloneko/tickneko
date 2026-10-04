@@ -10,9 +10,6 @@
 """
 from __future__ import annotations
 
-import asyncio
-import time
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -106,8 +103,7 @@ async def run_published_workflow(
     gateway: Any | None = None,
     trigger_data: Mapping[str, Any] | None = None,
     user_id: str = "",
-    on_message_consumed: Callable[[], None] | None = None,
-) -> bool:
+) -> None:
     """加载指定版本的图并**执行整条流程**；到点 / 消息回调都走它。
 
     启动载入**不走这里** —— 那一步只登记触发、不执行图，见
@@ -130,7 +126,7 @@ async def run_published_workflow(
     record = await store.get_version(workflow_id, version)
     if record is None:
         log.warning("工作流版本不存在，跳过执行", version=version)
-        return False
+        return
 
     graph = record.graph()
     # 到点回调：这个版本下次再到点，还是从这儿跑一遍（与本次同一个入口）
@@ -146,14 +142,12 @@ async def run_published_workflow(
     )
     if trigger_data is not None:
         ctx.trigger_data = dict(trigger_data)
-    ctx.on_message_consumed = on_message_consumed
     runner = SimpleWorkflowRunner()
     try:
         await runner.run(graph, ctx)
         log.info("工作流执行完成", version=version, node_count=len(graph.nodes))
     except Exception as exc:  # noqa: BLE001 — 执行引擎异常不能让发布接口挂掉
         _log_run_failure(log, "工作流执行失败", exc, version=version)
-    return ctx.message_consumed
 
 
 def _message_start_ids(graph: WorkflowGraph) -> set[str]:
@@ -319,61 +313,9 @@ class MessageRouter:
         #: owner_id -> { workflow_id -> version }：同一工作流重复登记覆盖（版本号随发布挪）
         self._routes: dict[str, dict[str, int]] = {}
         #: dispatch 跑整条流程要用的回调；装配时注入（见 :meth:`attach`）
-        self._run: Callable[..., Awaitable[bool | None]] | None = None
-        # A receipt includes a live task: WS and HTTP must never run the same graph twice.
-        self._receipts: OrderedDict[tuple[str, ...], tuple[asyncio.Future[bool], asyncio.Task[None], float]] = OrderedDict()
+        self._run: Callable[..., Awaitable[None]] | None = None
 
-    async def dispatch_once(self, owner_id: str, *, trigger_data: Mapping[str, Any]) -> bool:
-        """Coalesce concurrent consumers by message identity; cancellation only cancels the waiter.
-
-        Explicit consume resolves early. Otherwise wait until every workflow finishes.
-        Completed receipts expire after five minutes; in-flight runs are never evicted.
-        """
-        message_id = str(trigger_data.get("message_id", ""))
-        if not message_id:
-            raise ValueError("消息接管需要稳定的 message_id")
-        now = time.monotonic()
-        for old_key, (_, task, created) in list(self._receipts.items()):
-            if task.done() and now - created > 300:
-                self._receipts.pop(old_key)
-        key = (owner_id, *(str(trigger_data.get(field, "")) for field in
-               ("platform", "self_id", "chat", "chat_id", "message_id")))
-        receipt = self._receipts.get(key)
-        if receipt is None:
-            if len(self._receipts) >= 2048:
-                for old_key, (_, task, _) in list(self._receipts.items()):
-                    if task.done():
-                        self._receipts.pop(old_key)
-                        break
-                else:
-                    raise RuntimeError("消息接管队列已满")
-            decision: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-
-            def consume() -> None:
-                if not decision.done():
-                    decision.set_result(True)
-
-            async def execute() -> None:
-                try:
-                    await self.dispatch(owner_id, trigger_data=trigger_data, on_message_consumed=consume)
-                except Exception as exc:
-                    if not decision.done():
-                        decision.set_exception(exc)
-                finally:
-                    if not decision.done():
-                        decision.set_result(False)
-
-            task = asyncio.create_task(execute(), name="workflow-message-dispatch")
-            receipt = (decision, task, now)
-            self._receipts[key] = receipt
-            def completed(done: asyncio.Task[None]) -> None:
-                current = self._receipts.get(key)
-                if current is not None and current[1] is done:
-                    self._receipts[key] = (decision, done, time.monotonic())
-            task.add_done_callback(completed)
-        return await asyncio.shield(receipt[0])
-
-    def attach(self, run: Callable[..., Awaitable[bool | None]]) -> None:
+    def attach(self, run: Callable[..., Awaitable[None]]) -> None:
         """注入「跑整条流程」的回调：``dispatch`` 拿它执行匹配的工作流。
 
         回调签名是 ``(workflow_id, version) -> Awaitable[None]``，装配层把
@@ -395,8 +337,7 @@ class MessageRouter:
         """某个归属下登记过的消息触发快照（``{workflow_id: version}``）。"""
         return dict(self._routes.get(owner_id, {}))
 
-    async def dispatch(self, owner_id: str, *, trigger_data: Mapping[str, Any],
-                       on_message_consumed: Callable[[], None] | None = None) -> int:
+    async def dispatch(self, owner_id: str, *, trigger_data: Mapping[str, Any]) -> int:
         """消息进来：跑这个归属下**所有**登记过的 ``trigger=message`` 工作流，返回跑过的条数。
 
         * 每个工作流都拿同一份 ``trigger_data``（消息内容）与 ``user_id``（发消息的人，从
@@ -416,14 +357,9 @@ class MessageRouter:
             return 0
         user_id = str(trigger_data.get("user_id", "") or "")
         ran = 0
-        for workflow_id, version in list(routes.items()):
+        for workflow_id, version in routes.items():
             try:
-                kwargs: dict[str, Any] = {"trigger_data": trigger_data, "user_id": user_id}
-                if on_message_consumed is not None:
-                    kwargs["on_message_consumed"] = on_message_consumed
-                result = await self._run(workflow_id, version, **kwargs)
-                if result is True and on_message_consumed is not None:
-                    on_message_consumed()
+                await self._run(workflow_id, version, trigger_data=trigger_data, user_id=user_id)
                 ran += 1
             except Exception as exc:  # noqa: BLE001 — 单个坏工作流不能淹其它
                 _log_run_failure(
