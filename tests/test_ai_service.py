@@ -10,7 +10,7 @@ from tickneko.workflow.nodes.base import EnvironmentFailure, NodeFailure
 
 
 def node(**config):
-    return WorkflowNode(id="ai", type="ai-service", config={"endpoint": "http://127.0.0.1:5140/catbot/pipeline", **config})
+    return WorkflowNode(id="ai", type="ai-service", config={"endpoint": "http://127.0.0.1:5140/catbot/pipeline", "token_env": "AI_SERVICE_TOKEN", **config})
 
 
 def context():
@@ -67,3 +67,32 @@ def test_missing_identity_and_credentials(monkeypatch):
 @pytest.mark.parametrize("config", [{"endpoint": "file:///secret"}, {"endpoint": "http://key:secret@host"}, {"endpoint": "http://[invalid"}, {"endpoint": "http://host:wrong"}, {"timeout": 0}, {"timeout": "oops"}])
 def test_config_validation(config):
     assert validate_ai_service(node(**config))
+
+
+@pytest.mark.parametrize("missing", ["endpoint", "token_env"])
+def test_unconfigured_node_never_opens_http_even_with_other_credentials(monkeypatch, missing):
+    monkeypatch.setenv("AI_SERVICE_TOKEN", "some-other-service")
+    monkeypatch.setenv("BOTNODE_TOKEN", "private-cat-credential")
+    def forbidden_http():
+        pytest.fail("An unconfigured AI node must not open an HTTP client")
+    monkeypatch.setattr("tickneko.workflow.nodes.ai_service._import_httpx", forbidden_http)
+    incomplete = node()
+    del incomplete.config[missing]
+    assert validate_ai_service(incomplete)
+    with pytest.raises(ValueError):
+        asyncio.run(exec_ai_service(incomplete, context()))
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", "OTHER TOKEN", "${BOTNODE_TOKEN}"])
+def test_invalid_credential_variable_is_configuration_error(value):
+    assert any(issue.code == "INVALID_AI_CREDENTIAL_VARIABLE" for issue in validate_ai_service(node(token_env=value)))
+
+
+def test_no_credentials_means_zero_requests_and_no_private_fallback(monkeypatch):
+    monkeypatch.delenv("AI_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("BOTNODE_TOKEN", "private-cat-credential")
+    def forbidden_http():
+        pytest.fail("Missing credentials must be checked before importing / calling HTTP")
+    monkeypatch.setattr("tickneko.workflow.nodes.ai_service._import_httpx", forbidden_http)
+    with pytest.raises(RuntimeError, match="本次未发送 AI 请求"):
+        asyncio.run(exec_ai_service(node(), context()))

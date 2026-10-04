@@ -17,6 +17,8 @@ def test_preset_selects_one_route(monkeypatch, chat, message, local):
     graph = WorkflowGraph.model_validate(build_graph("http://localhost/ai"))
     assert validate_graph(graph).valid
     calls = http_stub(monkeypatch)
+    if local:
+        monkeypatch.delenv("AI_SERVICE_TOKEN")
     sent = []
 
     class Gateway:
@@ -46,3 +48,27 @@ def test_optional_user_filter(monkeypatch, user, should_call):
                             target=SimpleNamespace(platform="onebot", chat="private", user_id=int(user)))
     asyncio.run(SimpleWorkflowRunner().run(graph, ctx))
     assert bool(calls) == should_call
+
+
+def test_regular_workflow_without_ai_node_never_calls_ai(monkeypatch):
+    calls = http_stub(monkeypatch)
+    graph = WorkflowGraph.model_validate({"nodes": [
+        {"id": "start", "type": "start", "config": {"trigger": "message"}},
+        {"id": "send", "type": "send", "config": {"message": "普通工作流"}},
+        {"id": "end", "type": "end"},
+    ], "edges": [
+        {"source": "start", "target": "send"},
+        {"source": "start", "target": "send", "source_port": "target", "target_port": "target"},
+        {"source": "send", "target": "end"},
+    ]})
+    assert validate_graph(graph).valid
+    sent = []
+    class Gateway:
+        async def reply(self, target, content):
+            sent.append(content)
+            return SimpleNamespace(ok=True, data={}, message="")
+    ctx = NodeExecutionContext(gateway=Gateway())
+    ctx.trigger_data = {"message": "随便的内容", "target": object()}
+    asyncio.run(SimpleWorkflowRunner().run(graph, ctx))
+    assert sent == ["普通工作流"]
+    assert calls == []

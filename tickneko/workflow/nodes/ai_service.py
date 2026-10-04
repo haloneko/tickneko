@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -25,6 +26,9 @@ def validate_ai_service(node: WorkflowNode) -> list[ValidationIssue]:
         valid_url = False
     if not valid_url:
         errors.append(ValidationIssue(node_id=node.id, code="INVALID_AI_ENDPOINT", message="AI 服务地址必须是没有内嵌凭据的 HTTP(S) 地址", suggestion="填写服务的消息投递接口"))
+    token_env = node.config.get("token_env")
+    if not isinstance(token_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token_env):
+        errors.append(ValidationIssue(node_id=node.id, code="INVALID_AI_CREDENTIAL_VARIABLE", message="AI 服务尚未配置凭据环境变量名", suggestion="显式填写自己的凭据变量名；不会使用其他服务的凭据"))
     try:
         timeout = float(node.config.get("timeout", 15))
         if not 1 <= timeout <= 60:
@@ -40,7 +44,7 @@ def validate_ai_service(node: WorkflowNode) -> list[ValidationIssue]:
     outputs=[TRIGGER_PORT, PortSpec("accepted", "message", "已接单")],
     fields=[ConfigField("message", "消息内容"),
             ConfigField("endpoint", "消息投递接口", required=True),
-            ConfigField("token_env", "凭据环境变量名", required=True, default="AI_SERVICE_TOKEN"),
+            ConfigField("token_env", "凭据环境变量名", required=True),
             ConfigField("timeout", "接单超时（秒）", default=15)],
     validator=validate_ai_service,
 )
@@ -48,9 +52,9 @@ async def exec_ai_service(node: WorkflowNode, ctx: NodeExecutionContext) -> dict
     issues = validate_ai_service(node)
     if issues:
         raise ValueError(issues[0].message)
-    token = os.environ.get(str(node.config.get("token_env", "AI_SERVICE_TOKEN")), "").strip()
+    token = os.environ.get(node.config["token_env"], "").strip()
     if not token:
-        raise RuntimeError("AI 服务凭据环境变量未设置；不能将密钥写入工作流消息")
+        raise RuntimeError("AI 服务尚未配置：指定的凭据环境变量未设置；本次未发送 AI 请求")
     data = ctx.trigger_data
     payload = {key: str(data.get(key, "")) for key in ("platform", "chat", "chat_id", "message_id", "user_id")}
     payload["message"] = str(input_value(node, ctx, "message"))
