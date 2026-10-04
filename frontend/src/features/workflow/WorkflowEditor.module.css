@@ -70,8 +70,7 @@
   border-radius: 0;
   border: none;
   background: var(--surface-2);
-  background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
-  background-size: 20px 20px;
+  /* 点阵的间距、半径与偏移由 Canvas 按当前 pan / zoom 同步设置。 */
   overflow: hidden;
 }
 

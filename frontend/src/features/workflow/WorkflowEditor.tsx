@@ -34,6 +34,7 @@ import {
 import { useToast } from '../../common/Toast'
 import { copyText, readText } from '../../lib/clipboard'
 import { Canvas, type BoxRect } from './editor/Canvas'
+import { centeredNodePosition } from './editor/canvasGeometry'
 import {
   buildClipboardPayload,
   formatCopiedAt,
@@ -278,20 +279,25 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const addNode = useCallback(
     (type: string, pos?: Point) => {
       const def = nodeDef(type)
+      const height = nodeHeight(def)
+      const viewport = canvasRef.current?.getBoundingClientRect()
+      if (!pos && !viewport) return
+      const position = pos
+        ? { x: pos.x - NODE_W / 2, y: pos.y - height / 2 }
+        : centeredNodePosition(viewport!, { width: NODE_W, height }, pan, zoom)
       const id = uid(type)
       pushUndo()
       const node: WorkflowNode = {
         id,
         type: def.type,
         config: { ...def.defaults },
-        // pos：拖拽落点（鼠标位置，按节点中心换算成左上角）；点击添加沿用随机错开位置
-        x: pos ? pos.x - NODE_W / 2 : 80 + Math.random() * 200,
-        y: pos ? pos.y - nodeHeight(def) / 2 : 80 + Math.random() * 120,
+        // 拖拽落点保持原样；点击添加固定在当前屏幕视野中央。
+        ...position,
       }
       setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }))
       setSelectedId(id)
     },
-    [pushUndo],
+    [pushUndo, pan, zoom],
   )
 
   const deleteNode = useCallback(
@@ -418,7 +424,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       if (!dragStart.armed) {
-        addNode(type) // 纯点击：和以前一样直接出现
+        addNode(type) // 纯点击：出现在当前可视区中央
         return
       }
       setNewDrag(null)

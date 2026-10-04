@@ -13,6 +13,7 @@
  */
 import type { ReactNode } from 'react'
 import type { Point } from './catalog'
+import { canvasGridStyle } from './canvasGeometry'
 import styles from '../WorkflowEditor.module.css'
 
 export interface BoxRect {
@@ -61,7 +62,7 @@ export function Canvas({
     <div
       ref={canvasRef}
       className={styles.canvas}
-      style={{ cursor: panning ? 'grabbing' : 'default' }}
+      style={{ cursor: panning ? 'grabbing' : 'default', ...canvasGridStyle(pan, zoom) }}
       onContextMenu={(e) => e.preventDefault()}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
