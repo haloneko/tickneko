@@ -2751,6 +2751,10 @@ def test_builtin_field_metadata_is_declared_in_backend() -> None:
     # 订阅哪种事件也是后端声明的下拉（画布不再自己抄一份事件类型）
     assert event_trigger.fields[0].options == EVENT_TYPE_OPTIONS
     assert "*" in EVENT_TYPE_OPTIONS  # 通配：任何事件都触发
+    # 下拉里显示中文、值仍是平台原生事件名（要跟上报的 event_type 全等匹配，一个字符都不能改）
+    labels = event_trigger.fields[0].option_labels
+    assert set(labels) == set(EVENT_TYPE_OPTIONS)  # 每一项都有显示名，别漏
+    assert labels["group_increase"] == "有人进群" and labels["*"] == "任何事件"
 
     test = get_spec("test")
     assert test is not None
@@ -3406,6 +3410,16 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     url = next(field for field in http["fields"] if field["name"] == "url")
     # url 的「必填」落在入口上：字段本身没默认值，接线或手填都行
     assert url["required"] is False and url["has_default"] is False and url["default"] is None
+    # 没配显示名的枚举就是 null：画布直接显示值本身（通用协议名，中文反而不好认）
+    assert method["option_labels"] is None
+
+    # 枚举的显示名随目录下发：事件类型的值是平台原生名（要跟上报全等匹配，不能改），
+    # 画布按 option_labels 显示中文
+    event_field = nodes["trigger-event"]["fields"][0]
+    assert event_field["name"] == "event_type"
+    assert set(event_field["option_labels"]) == set(event_field["options"])
+    assert event_field["option_labels"]["friend"] == "加好友请求"
+    assert "*" in event_field["options"]  # 值仍是通配符那个写法
 
     # 透传对：placeholder 的泛型入口 / 出口用 tie 互相指认（指向同一节点另一侧的端口 id）——
     # 画布据此让输入输出显示同一种类型（两端同色表示对应）

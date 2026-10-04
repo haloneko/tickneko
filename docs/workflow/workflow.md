@@ -159,7 +159,7 @@ workflow_versions             每次保存一张不可变图快照
 |---|---|---|---|
 | `base.py` | **契约**：`NodeExecutor` / `NodeSpec` / `ConfigField` / `PortSpec` / `NodeExecutionContext` / `input_value`。`NodeSpec` 除校验规则外还带**展示信息**（`label` / `order` / `inputs` / `outputs`）——画布照它渲染，见 §5.6 ⑥ | —— | —— |
 | `registry.py` | **注册表**：`register_node` / `declare_node_type` / `get_spec` / `get_executor` / `registered_types` / `load_node_modules` | —— | —— |
-| `triggers.py` | **三个触发器**（都 `role="start"`，图起点）：`trigger-message` 等消息接入（登记到 `MessageRouter`）、`trigger-time` 按 cron 登记到调度器、`trigger-event` 订阅平台事件（加好友 / 进群 / 撤回 / 戳一戳…，登记到 `EventRouter`，按事件类型匹配）—— **加 / 摘触发只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版）。拆成三个类型而不是一个节点带下拉：形态本来就不一样（定时要 cron、事件要事件类型、消息什么都不配），拆开后卡片形状固定、面板不出现「跟当前触发方式无关的字段」 | `trigger-message`：— → `trigger` / `message` / `target`；`trigger-time`：— → `trigger`；`trigger-event`：— → `trigger` / `event_type` / `user_id` / `chat` / `chat_id` / `text` / `target` | `trigger-time`：`cron`（必填，自注册校验器）、`name`；`trigger-event`：`event_type`（必填，可选项见 `EVENT_TYPE_OPTIONS`，`*` = 任何事件）；`trigger-message`：无 |
+| `triggers.py` | **三个触发器**（都 `role="start"`，图起点）：`trigger-message` 等消息接入（登记到 `MessageRouter`）、`trigger-time` 按 cron 登记到调度器、`trigger-event` 订阅平台事件（加好友 / 进群 / 撤回 / 戳一戳…，登记到 `EventRouter`，按事件类型匹配）—— **加 / 摘触发只在「登记那一趟」**（拨运行开关 / 启动载入 / 发布新版）。拆成三个类型而不是一个节点带下拉：形态本来就不一样（定时要 cron、事件要事件类型、消息什么都不配），拆开后卡片形状固定、面板不出现「跟当前触发方式无关的字段」 | `trigger-message`：— → `trigger` / `message` / `target`；`trigger-time`：— → `trigger`；`trigger-event`：— → `trigger` / `event_type` / `user_id` / `chat` / `chat_id` / `text` / `target` | `trigger-time`：`cron`（必填，自注册校验器）、`name`；`trigger-event`：`event_type`（必填，可选项见 `EVENT_TYPE_OPTIONS`，`*` = 任何事件；下拉里按 `EVENT_TYPE_LABELS` 显示中文，值仍是平台原生事件名）；`trigger-message`：无 |
 | `end.py` | 图终点（`role="end"`，`max_outgoing=0`）：写一条完成日志 | `trigger` → — | —— |
 | `log.py` | 按级别写业务日志；内容从 `message` 入口来 | `trigger` / `message` → `trigger` | `message`（没接线时手填）、`level`（缺省 INFO，注册默认值；枚举由自注册校验器把） |
 | `test.py` | **调试**：把入口的值**回显**到日志（还附一份**全部入口值**的快照），再原样从出口送下去 —— 夹在中间看「线上流过了什么」；不改写、不判断，纯粹给画布联调用 | `trigger` / `message` → `trigger` / `message` | `message`（没接线时的手填值，缺省 `hello`） |
@@ -336,6 +336,7 @@ config 里同名字段的手填值**，两者都没有才用 `default`。这是�
 | 不可缺失字段 | `ConfigField("url", required=True)` | 主流程上的节点直接报 `MISSING_CONFIG`（`None` / 空串也算缺失） |
 | 默认值字段 | `ConfigField("level", default="INFO")` | 校验前先补默认值（自定义校验器看到的是补全后的 config）；保存版本时写进快照 |
 | 枚举字段 | `ConfigField("level", default="INFO", options=LOG_LEVEL_ORDER)` | 同上；`options` 只描述「有哪些可选值、按什么顺序显示」（画布渲染成下拉），校验仍归自定义校验器 |
+| 枚举显示名（下拉里显示中文） | `ConfigField("event_type", options=EVENT_TYPE_OPTIONS, option_labels=EVENT_TYPE_LABELS)` | `option_labels` 是「值 → 界面文字」：**值不改** —— 它可能要跟外部对上号（事件类型要跟平台上报的 `event_type` 全等匹配），中文只用来看着好懂；没配显示名的项直接显示值本身 |
 
 连线本身的规则（端口存不存在 `UNKNOWN_PORT`、两端同不同类 `PORT_TYPE_MISMATCH`、数据入口只接
 一条线 `DUPLICATE_INPUT_EDGE`）由校验器统一查，**不用自己写**。

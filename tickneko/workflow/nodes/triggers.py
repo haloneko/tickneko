@@ -67,6 +67,23 @@ EVENT_TYPE_OPTIONS: tuple[str, ...] = (
 #: 事件类型集合（校验用；与上面的顺序表同一份内容）
 EVENT_TYPES: frozenset[str] = frozenset(EVENT_TYPE_OPTIONS)
 
+#: 事件类型在画布下拉里的**显示名**（值 -> 中文）。**值一个字符都不改** —— 它要跟平台上报的
+#: ``event_type`` 全等匹配，中文只用来「看着好懂」，不参与匹配（见 :class:`ConfigField`
+#: 的 ``option_labels``）；键集合与 :data:`EVENT_TYPE_OPTIONS` 一致。
+EVENT_TYPE_LABELS: dict[str, str] = {
+    "*": "任何事件",
+    "friend": "加好友请求",
+    "group": "加群 / 被邀请入群",
+    "group_increase": "有人进群",
+    "group_decrease": "有人退群 / 被踢",
+    "group_ban": "群禁言",
+    "group_recall": "群消息被撤回",
+    "friend_recall": "私聊消息被撤回",
+    "group_upload": "群文件上传",
+    "friend_add": "好友添加成功",
+    "notify": "戳一戳 / 群荣誉",
+}
+
 
 # --------------------------------------------------------------------------- 校验
 def validate_time_cron(node: WorkflowNode) -> list[ValidationIssue]:
@@ -116,7 +133,11 @@ def validate_event_type(node: WorkflowNode) -> list[ValidationIssue]:
                 node_id=node.id,
                 code="INVALID_EVENT_TYPE",
                 message=f"事件触发的开始节点 {node.id} 订阅的事件类型 {event_type!r} 不认得",
-                suggestion=f"可选：{' / '.join(EVENT_TYPE_OPTIONS)}",
+                suggestion="可选："
+                + " / ".join(
+                    f"{value}（{EVENT_TYPE_LABELS.get(value, value)}）"
+                    for value in EVENT_TYPE_OPTIONS
+                ),
             )
         ]
     return []
@@ -269,7 +290,13 @@ async def _register_cron(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[
         PortSpec("target", "target", "会话定位"),
     ],
     fields=[
-        ConfigField("event_type", "事件类型", options=EVENT_TYPE_OPTIONS),
+        # 值是平台原生事件名（要跟上报的 event_type 全等匹配），下拉里显示中文（option_labels）
+        ConfigField(
+            "event_type",
+            "事件类型",
+            options=EVENT_TYPE_OPTIONS,
+            option_labels=EVENT_TYPE_LABELS,
+        ),
     ],
     validator=validate_event_type,
 )

@@ -32,8 +32,8 @@
 """
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from tickneko.core.cache import cache as process_cache
@@ -118,7 +118,11 @@ class ConfigField:
       :func:`tickneko.workflow.validator.apply_config_defaults` 在保存版本时填默认值；
     * 两个都不给：纯可选字段，校验器不碰；
     * 给了 ``options``：这是**枚举**字段（画布渲染成下拉，顺序即显示顺序）。校验规则仍写在
-      节点自己的 validator 里，这里只描述「有哪些可选值」。
+      节点自己的 validator 里，这里只描述「有哪些可选值」；
+    * 给了 ``option_labels``：枚举项的**显示名**（值 -> 画布上显示的文字）。值本身不改 ——
+      它可能是写进图里要跟外部对上号的东西（事件类型要跟平台上报的 ``event_type`` 全等匹配、
+      日志级别要原样交给日志库），中文只用来「看着好懂」，不参与匹配；没配显示名的项直接
+      显示值本身。
     """
 
     name: str
@@ -126,6 +130,7 @@ class ConfigField:
     required: bool = False
     default: Any = MISSING_DEFAULT
     options: tuple[str, ...] | None = None
+    option_labels: Mapping[str, str] = field(default_factory=dict[str, str])
 
 
 @dataclass(frozen=True)

@@ -131,7 +131,8 @@ export function Inspector({
                     >
                       {field.options.map((option) => (
                         <option key={option} value={option}>
-                          {option}
+                          {/* 显示名来自后端（option_labels）：值是「跟外部对上号」的那个，不改 */}
+                          {field.option_labels?.[option] ?? option}
                         </option>
                       ))}
                     </select>

@@ -95,6 +95,9 @@ class NodeFieldData(_Frozen):
     has_default: bool
     default: Any = None
     options: list[str] | None = None
+    #: 枚举项的**显示名**（值 -> 画布上显示的文字）：值仍是 ``options`` 里那个（它可能要跟
+    #: 外部对上号，别改），中文只用来看着好懂 —— 没配的项前端直接显示值本身
+    option_labels: dict[str, str] | None = None
 
     @classmethod
     def from_field(cls, field: ConfigField) -> NodeFieldData:
@@ -106,6 +109,7 @@ class NodeFieldData(_Frozen):
             has_default=has_default,
             default=field.default if has_default else None,
             options=list(field.options) if field.options else None,
+            option_labels=dict(field.option_labels) or None,
         )
 
 

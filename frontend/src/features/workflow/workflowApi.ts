@@ -80,6 +80,8 @@ export interface NodeFieldSpec {
   default: unknown
   /** 有值就是枚举字段：渲染成下拉，顺序即显示顺序 */
   options: string[] | null
+  /** 枚举项的显示名（值 -> 界面文字）：值是「跟外部对上号」的那个，不改；没配的项直接显示值 */
+  option_labels: Record<string, string> | null
 }
 
 /** 一种节点类型：画布的面板项 / 标题 / 端口 / 配置表单全从这里来。 */

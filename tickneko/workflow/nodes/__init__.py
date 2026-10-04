@@ -99,6 +99,7 @@ from .registry import (
 )
 from .test import exec_test
 from .triggers import (
+    EVENT_TYPE_LABELS,
     EVENT_TYPE_OPTIONS,
     EVENT_TYPES,
     exec_trigger_event,
@@ -145,6 +146,7 @@ __all__ = [
     "validate_time_cron",
     "validate_event_type",
     "EVENT_TYPE_OPTIONS",
+    "EVENT_TYPE_LABELS",
     "EVENT_TYPES",
     "workflow_task_id",
     "exec_end",
