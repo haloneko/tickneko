@@ -21,6 +21,9 @@
  * * ``editor/Toolbar.tsx``         顶部工具栏
  * * ``editor/ContextMenu.tsx``     节点右键菜单（删除）
  * * ``editor/CanvasMenu.tsx``      空白处右键菜单（分类 + 二级菜单添加节点）
+ * * ``editor/ContextMenuHost.tsx`` 右键菜单的唯一出口：按状态画其中一份
+ * * ``editor/useContextMenu.ts``   菜单状态 + 点别处 / Esc 关闭
+ * * ``editor/useCanvasPan.ts``     右键拖动平移（顺带记「点了一下还是拖了一下」）
  * * ``editor/useWorkflowDoc.ts``    暂存 / 校验 / 提交版本 / 发布 / 运行开关（后端那一半）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -36,7 +39,7 @@ import { useToast } from '../../common/Toast'
 import { copyText, readText } from '../../lib/clipboard'
 import { Canvas, type BoxRect } from './editor/Canvas'
 import { centeredNodePosition } from './editor/canvasGeometry'
-import { CanvasMenu } from './editor/CanvasMenu'
+import { ContextMenuHost } from './editor/ContextMenuHost'
 import {
   buildClipboardPayload,
   formatCopiedAt,
@@ -45,7 +48,6 @@ import {
   serializeClipboard,
   type ClipboardPayload,
 } from './editor/clipboard'
-import { ContextMenu } from './editor/ContextMenu'
 import { EdgeLayer } from './editor/EdgeLayer'
 import { GhostNode } from './editor/GhostNode'
 import { Inspector } from './editor/Inspector'
@@ -72,6 +74,8 @@ import {
   type Point,
   type Positions,
 } from './editor/catalog'
+import { useContextMenu } from './editor/useContextMenu'
+import { useCanvasPan } from './editor/useCanvasPan'
 import { useCanvasView } from './editor/useCanvasView'
 import { useGraphHistory } from './editor/useGraphHistory'
 import { useLatest } from './editor/useLatest'
@@ -99,10 +103,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [showInspector, setShowInspector] = useState(true)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [boxSel, setBoxSel] = useState<BoxRect | null>(null)
-  /** 节点右键菜单：视口坐标 + 这一次要操作的节点集合 */
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null)
-  /** 空白处右键菜单：视口坐标 + 要落子的画布坐标（新节点以它为中心） */
-  const [canvasMenu, setCanvasMenu] = useState<{ x: number; y: number; point: Point } | null>(null)
+  /** 右键菜单（节点上 / 空白处）：同一时刻只有一份，状态与关闭都在 hook 里，见 useContextMenu */
+  const { state: menuState, ref: menuRef, open: openMenuAt, close: closeMenu } = useContextMenu()
   /**
    * 粘贴虚影（Ctrl+V 放置模式）：剪贴板内容先以半透明预览跟鼠标走，左键落子才真正放图。
    * x/y = 虚影组中心当前所在画布坐标；cx/cy = 组中心在剪贴板坐标里的位置。
@@ -128,18 +130,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const canvasRef = useRef<HTMLDivElement>(null)
   /** 最近一次画布鼠标位置（画布坐标）：Ctrl+V 进入放置模式时拿它当虚影落点 */
   const lastPointerRef = useRef<Point | null>(null)
-  const panRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
   /** 框选起点（画布坐标） */
   const boxRef = useRef<Point | null>(null)
   /** 本次空白拖拽是否已越过阈值进入框选（松手时区分「点了一下」与「框选完」） */
   const boxMovedRef = useRef(false)
   /** 框选结束的松手会被浏览器补发一发 click，用它立牌子吞掉（见画布 onClick） */
   const suppressClickRef = useRef(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-  /** 空白处右键菜单的根节点（点它里面不算「点别处」） */
-  const canvasMenuRef = useRef<HTMLDivElement>(null)
-  /** 本次右键是否真的拖动过画布（拖过就不弹节点右键菜单） */
-  const panMovedRef = useRef(false)
   /**
    * 画布内部剪贴板：Ctrl+C / Ctrl+X 存这里的节点 + 组内连线，Ctrl+V 以虚影放置。
    *
@@ -159,6 +155,12 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   // ---- hooks ----
   const { pan, zoom, setPan, toCanvas, zoomAt, reset: resetView } = useCanvasView()
   const { pushUndo, undo: popUndo, reset: resetHistory } = useGraphHistory(graph)
+  /**
+   * 右键拖动平移。起点／「这次是点还是拖」都归它记；拖动一开始就把挂着的菜单收掉
+   * （mac 上 contextmenu 是右键按下即发，不在这儿收会出现「菜单挂着、画布还在拖」）。
+   */
+  const { panning, begin: beginPan, move: movePan, end: endPan, dragged: panDragged } =
+    useCanvasPan({ pan, setPan, onDragStart: closeMenu })
   /** 打开工作流：撤销栈归零（Ctrl+Z 不会跨工作流回退） */
   const onLoaded = useCallback(
     (loaded: WorkflowGraph) => {
@@ -448,20 +450,55 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }
 
   // ---- 画布事件 ----
-  /** 右键节点：点在框选集合内 = 对整组操作；集合外 = 先让它成为当前选择（只它一个） */
-  const openNodeMenu = useCallback((e: React.MouseEvent, nodeId: string) => {
-    const ids = selectedIdsRef.current
-    let targets: string[]
-    if (ids.has(nodeId)) {
-      targets = [...ids]
-      setSelectedId(nodeId)
-    } else {
-      targets = [nodeId]
-      setSelectedId(nodeId)
-      if (ids.size > 0) setSelectedIds(new Set())
-    }
-    setCtxMenu({ x: e.clientX, y: e.clientY, ids: targets })
+  /** 点空白 / 右键空白：同一件事（清空选中） */
+  const clearSelection = useCallback(() => {
+    setSelectedId(null)
+    setSelectedIds(new Set())
   }, [])
+
+  /**
+   * 右键的**唯一入口**：节点与空白共用（``nodeId === null`` = 空白）。
+   *
+   * 这里只做「按目标决定弹哪一份菜单」这件事 —— 菜单状态与关闭归 useContextMenu，
+   * 「这一下是点还是拖（拖动平移就不弹）」归 useCanvasPan，两边都不在这函数里自己记账。
+   */
+  const onContextMenu = useCallback(
+    (e: React.MouseEvent, nodeId: string | null) => {
+      e.preventDefault()
+      e.stopPropagation() // 节点上的右键不再冒泡到画布，免得又弹一份空白菜单
+      if (panDragged()) return // 这一发右键是拖动平移收尾，不弹菜单
+
+      if (nodeId) {
+        // 点在框选集合内 = 对整组操作；集合外 = 先让它成为当前选择（只它一个）
+        const current = selectedIdsRef.current
+        const ids = current.has(nodeId) ? [...current] : [nodeId]
+        setSelectedId(nodeId)
+        if (!current.has(nodeId) && current.size > 0) setSelectedIds(new Set())
+        openMenuAt({ kind: 'node', x: e.clientX, y: e.clientY, ids })
+        return
+      }
+
+      // 空白处：与左键点空白同义（清空选中），落点就是右键那一处的画布坐标
+      if (!palette) return // 目录还没拉回来：没有可加的节点，这份菜单画出来也是空的
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      clearSelection()
+      openMenuAt({
+        kind: 'canvas',
+        x: e.clientX,
+        y: e.clientY,
+        point: toCanvas(e.clientX, e.clientY, rect),
+      })
+    },
+    [panDragged, palette, openMenuAt, clearSelection, toCanvas],
+  )
+
+  /** 节点卡片那份签名（``nodeId`` 必填）；空白处那份见下 */
+  const onNodeContextMenu = onContextMenu
+  const onCanvasContextMenu = useCallback(
+    (e: React.MouseEvent) => onContextMenu(e, null),
+    [onContextMenu],
+  )
 
   const onNodeMouseDown = useCallback(
     (e: React.MouseEvent, nodeId: string) => {
@@ -488,44 +525,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     suppressClickRef.current = false
   }, [])
 
-  const onNodeContextMenu = useCallback(
-    (e: React.MouseEvent, nodeId: string) => {
-      e.preventDefault()
-      e.stopPropagation()
-      // 右键拖动平移刚结束的那一发：不弹菜单
-      if (panMovedRef.current) return
-      openNodeMenu(e, nodeId)
-    },
-    [openNodeMenu],
-  )
-
-  /**
-   * 右键空白：弹「添加节点」菜单（分类 + 二级菜单），落点就是右键那一处的画布坐标。
-   *
-   * 右键按住拖动是平移（``panMovedRef``），拖过就不弹菜单 —— 一个键两种用途靠「动没动」区分。
-   * 目录还没拉回来时没东西可加，直接不弹。
-   */
-  const onCanvasContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      if (panMovedRef.current) return // 刚用右键拖过画布：那是平移，不弹菜单
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (!rect || !palette) return
-      // 空白处右键与左键点空白同义：收掉节点菜单与选中态
-      setCtxMenu(null)
-      setSelectedId(null)
-      setSelectedIds(new Set())
-      setCanvasMenu({ x: e.clientX, y: e.clientY, point: toCanvas(e.clientX, e.clientY, rect) })
-    },
-    [palette, toCanvas],
-  )
-
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
-      // 右键：开始平移（动没动过留给 panMovedRef 记，松手时决定弹不弹节点菜单）
+      // 右键：按下即开始平移；松手那发 contextmenu 靠 panDragged() 判断该不该弹菜单
       e.preventDefault()
-      panMovedRef.current = false
-      panRef.current = { startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
+      beginPan(e)
       return
     }
     if (e.button !== 0) return
@@ -544,18 +548,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const onCanvasMouseMove = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
-    if (panRef.current) {
-      const { startX, startY, panX, panY } = panRef.current
-      if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 3 && !panMovedRef.current) {
-        // 真的开始平移了：菜单（若有）收掉 —— mac 上 contextmenu 是右键**按下**就发的，
-        // 不在这里收，会出现「菜单挂在那儿、画布还在跟着拖」
-        panMovedRef.current = true
-        setCtxMenu(null)
-        setCanvasMenu(null)
-      }
-      setPan({ x: panX + (e.clientX - startX), y: panY + (e.clientY - startY) })
-      return
-    }
+    if (movePan(e)) return // 正在右键平移：这一发移动归它管
     const point = toCanvas(e.clientX, e.clientY, rect)
     lastPointerRef.current = point
     if (placing) {
@@ -605,7 +598,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       bringToFront(selectedIds)
     }
     connectRef.current = null
-    panRef.current = null
+    endPan()
     boxRef.current = null
     boxMovedRef.current = false
     setConnectCursor(null)
@@ -627,8 +620,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       suppressClickRef.current = false
       return
     }
-    setSelectedId(null)
-    setSelectedIds(new Set())
+    clearSelection()
   }
 
   // ---- 端口连线 ----
@@ -900,29 +892,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     return () => window.removeEventListener('keydown', onKey)
   }, [drafting, draft, undo, copySelection, getSelectionIds, startPlacing, deleteNodesByIds, placing])
 
-  // 右键菜单：点别处（或按 Esc）关闭（节点菜单 / 空白菜单共用一套关闭逻辑，两者不会同时开着）
-  useEffect(() => {
-    if (!ctxMenu && !canvasMenu) return
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (menuRef.current?.contains(target) || canvasMenuRef.current?.contains(target)) return
-      setCtxMenu(null)
-      setCanvasMenu(null)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setCtxMenu(null)
-        setCanvasMenu(null)
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [ctxMenu, canvasMenu])
-
   // ---- 渲染辅助 ----
   const selectedNode = selectedId ? nodeById.get(selectedId) ?? null : null
   const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
@@ -1004,7 +973,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           canvasRef={canvasRef}
           pan={pan}
           zoom={zoom}
-          panning={panRef.current !== null}
+          panning={panning}
           placeholder={placeholder}
           empty={graph.nodes.length === 0}
           boxSel={boxSel}
@@ -1101,33 +1070,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         )}
       </div>
 
-      {/* 空白处右键菜单：一级分类、二级节点类型，点了就在右键那一处落子 */}
-      {canvasMenu && palette && (
-        <CanvasMenu
-          x={canvasMenu.x}
-          y={canvasMenu.y}
-          items={palette}
-          menuRef={canvasMenuRef}
-          onAdd={(type) => {
-            addNode(type, canvasMenu.point)
-            setCanvasMenu(null)
-          }}
-        />
-      )}
-
-      {/* 节点右键菜单：fixed 定位（视口坐标），点别处 / Esc 关闭 */}
-      {ctxMenu && (
-        <ContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          ids={ctxMenu.ids}
-          menuRef={menuRef}
-          onDelete={(ids) => {
-            deleteNodesByIds(ids)
-            setCtxMenu(null)
-          }}
-        />
-      )}
+      {/* 右键菜单（节点删除 / 空白添加节点）：画哪一份由状态决定，见 ContextMenuHost */}
+      <ContextMenuHost
+        state={menuState}
+        menuRef={menuRef}
+        catalog={palette}
+        onDeleteNodes={(ids) => {
+          deleteNodesByIds(ids)
+          closeMenu()
+        }}
+        onAddNode={(type, at) => {
+          addNode(type, at)
+          closeMenu()
+        }}
+      />
     </div>
   )
 }
