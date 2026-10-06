@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from collections import deque
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from typing import NamedTuple, cast
@@ -23,7 +24,7 @@ class _Entry(NamedTuple):
     """一条记录：结构类型 + 值 + 过期时刻（``None`` = 永不过期）。"""
 
     kind: str  # "string" / "list" / "hash"
-    value: object  # str / list[str] / dict[str, str]
+    value: object  # str / deque[str] / dict[str, str]
     deadline: float | None
 
 
@@ -106,7 +107,7 @@ class MemoryCache:
         return value
 
     # ---- 列表 ----
-    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
         return self._push(key, values, left=False, ttl=ttl)
 
     async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
@@ -114,39 +115,52 @@ class MemoryCache:
 
     async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
         items = self._list(key)
-        return [] if items is None else _slice(items, start, stop)
+        # deque 不支持切片，取区间时整条转成 list 再按 LRANGE 规则切
+        return [] if items is None else _slice(list(items), start, stop)
 
     async def list_length(self, key: str) -> int:
         items = self._list(key)
         return 0 if items is None else len(items)
 
-    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
         entry = self._typed(key, "list")
         if entry is None or count <= 0:
             return []
-        items = cast(list[str], entry.value)
+        items = cast(deque[str], entry.value)
         take = min(count, len(items))
-        popped = items[len(items) - take :]  # 从右侧摘下来
-        del items[len(items) - take :]
+        popped = [items.pop() for _ in range(take)]  # 从右侧摘，最右的先出来
         if items:
             self._data[key] = _Entry("list", items, entry.deadline)
         else:  # 弹空了键就没了（与 Redis 一致）
             del self._data[key]
-        return popped[::-1]  # 按弹出顺序给出：最右侧的先出来
+        return popped  # 按弹出顺序给出：最右侧的先出来
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        entry = self._typed(key, "list")
+        if entry is None or count <= 0:
+            return []
+        items = cast(deque[str], entry.value)
+        take = min(count, len(items))
+        popped = [items.popleft() for _ in range(take)]  # 从左侧摘，最左的先出来
+        if items:
+            self._data[key] = _Entry("list", items, entry.deadline)
+        else:  # 弹空了键就没了（与 Redis 一致）
+            del self._data[key]
+        return popped  # 按弹出顺序给出：最左侧的先出来
 
     def _push(self, key: str, values: Sequence[str], *, left: bool, ttl: float | None) -> int:
         self._check_strings(values, "列表元素")
         entry = self._typed(key, "list")
         if not values:  # 空推入当「问长度」：不建键（空列表不占键）
-            return 0 if entry is None else len(cast(list[str], entry.value))
+            return 0 if entry is None else len(cast(deque[str], entry.value))
         if entry is None:  # 新建的键才用得上 ttl
-            items: list[str] = []
+            items: deque[str] = deque()
             deadline = self._deadline(ttl)
         else:
-            items = cast(list[str], entry.value)
+            items = cast(deque[str], entry.value)
             deadline = entry.deadline  # 往已有的键上追加，不动 TTL
         if left:
-            items[0:0] = values
+            items.extendleft(reversed(values))  # extendleft 是逐个从左侧塞，倒序才保持原序
         else:
             items.extend(values)
         self._data[key] = _Entry("list", items, deadline)
@@ -282,9 +296,9 @@ class MemoryCache:
         entry = self._typed(key, "string")
         return None if entry is None else cast(str, entry.value)
 
-    def _list(self, key: str) -> list[str] | None:
+    def _list(self, key: str) -> deque[str] | None:
         entry = self._typed(key, "list")
-        return None if entry is None else cast(list[str], entry.value)
+        return None if entry is None else cast(deque[str], entry.value)
 
     def _hash(self, key: str) -> dict[str, str] | None:
         entry = self._typed(key, "hash")

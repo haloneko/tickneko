@@ -186,12 +186,12 @@ class Cache:
         return await self._require().clear()
 
     # ---- 列表（Redis 的 list）----
-    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
         """从右侧推入元素，返回推入后的长度；``ttl`` 只在键不存在时用。"""
-        return await self._require().list_push(key, *values, ttl=self._resolve_ttl(ttl))
+        return await self._require().list_push_right(key, *values, ttl=self._resolve_ttl(ttl))
 
     async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
-        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push`。"""
+        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push_right`。"""
         return await self._require().list_push_left(key, *values, ttl=self._resolve_ttl(ttl))
 
     async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
@@ -202,9 +202,13 @@ class Cache:
         """列表长度（键不存在算 0）。"""
         return await self._require().list_length(key)
 
-    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
         """从右侧弹出至多 ``count`` 个元素，按弹出顺序返回；弹空之后键就没了。"""
-        return await self._require().list_pop(key, count)
+        return await self._require().list_pop_right(key, count)
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        """从左侧弹出至多 ``count`` 个元素，按弹出顺序返回；弹空之后键就没了。"""
+        return await self._require().list_pop_left(key, count)
 
     # ---- 哈希（Redis 的 hash）----
     async def hash_set(self, key: str, items: Mapping[str, str], ttl: float | None = None) -> int:

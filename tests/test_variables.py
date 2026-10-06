@@ -166,7 +166,7 @@ class TestVariables:
         await env.cache.hash_set(
             f"workflow:acct:{admin_id}:配置", {"主题色": "蓝", "模式": "夜间"}
         )
-        await env.cache.list_push(f"workflow:acct:{admin_id}:队列", "A", "B")
+        await env.cache.list_push_right(f"workflow:acct:{admin_id}:队列", "A", "B")
 
         page = page_of(await env.client.get(VARIABLES_PATH, headers=auth(admin_token)))
         assert page["total"] == 3

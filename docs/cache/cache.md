@@ -44,7 +44,7 @@ await cache.start()                     # 默认就是本地内存版：不启�
 await cache.set("k", "v", ttl=60)
 await cache.get("k")
 
-await cache.list_push("queue", "a", "b")            # 列表
+await cache.list_push_right("queue", "a", "b")      # 列表
 await cache.hash_set("user:1", {"name": "阿一"})    # 哈希
 await cache.hash_get("user:1", "name")              # 单字段读
 await cache.hash_exists("user:1", "name")           # 字段在不在（HEXISTS）

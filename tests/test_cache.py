@@ -176,8 +176,8 @@ class TestMemoryBackend:
             await backend.stop()
 
     async def test_list_push_range_and_length(self, memory: Cache) -> None:
-        assert await memory.list_push("q", "a", "b") == 2
-        assert await memory.list_push("q", "c") == 3
+        assert await memory.list_push_right("q", "a", "b") == 2
+        assert await memory.list_push_right("q", "c") == 3
         assert await memory.list_range("q") == ["a", "b", "c"]  # 0 -1 就是整条列表
         assert await memory.list_range("q", -2, -1) == ["b", "c"]  # 负数从右数，两端都含
         assert await memory.list_range("q", 1, 1) == ["b"]
@@ -188,24 +188,32 @@ class TestMemoryBackend:
 
     async def test_list_push_left_and_pop_order(self, memory: Cache) -> None:
         await memory.list_push_left("q", "b", "c")  # 左侧推：b 在 c 前面
-        await memory.list_push("q", "a")
+        await memory.list_push_right("q", "a")
         assert await memory.list_range("q") == ["b", "c", "a"]
-        assert await memory.list_pop("q", 2) == ["a", "c"]  # 按弹出顺序：最右侧的先出来
-        assert await memory.list_pop("q") == ["b"]
+        assert await memory.list_pop_right("q", 2) == ["a", "c"]  # 按弹出顺序：最右侧的先出来
+        assert await memory.list_pop_right("q") == ["b"]
         assert await memory.exists("q") is False  # 弹空了键就没了（与 Redis 一致）
-        assert await memory.list_pop("q") == []
-        assert await memory.list_pop("q", 0) == []
+        assert await memory.list_pop_right("q") == []
+        assert await memory.list_pop_right("q", 0) == []
+
+    async def test_list_pop_left_order(self, memory: Cache) -> None:
+        await memory.list_push_right("q", "a", "b", "c")
+        assert await memory.list_pop_left("q", 2) == ["a", "b"]  # 按弹出顺序：最左侧的先出来
+        assert await memory.list_pop_left("q") == ["c"]
+        assert await memory.exists("q") is False  # 弹空了键就没了（与 Redis 一致）
+        assert await memory.list_pop_left("q") == []
+        assert await memory.list_pop_left("q", 0) == []
 
     async def test_list_ttl_only_on_create(self, memory: Cache) -> None:
-        await memory.list_push("q", "a", ttl=5)
+        await memory.list_push_right("q", "a", ttl=5)
         remaining = await memory.ttl("q")
         assert remaining is not None and 0 < remaining <= 5
-        await memory.list_push("q", "b")  # 往已有的键上追加：不动 TTL
+        await memory.list_push_right("q", "b")  # 往已有的键上追加：不动 TTL
         refreshed = await memory.ttl("q")
         assert refreshed is not None and refreshed <= remaining  # 只减不增
 
     async def test_list_expires(self, memory: Cache) -> None:
-        await memory.list_push("q", "a", ttl=0.05)
+        await memory.list_push_right("q", "a", ttl=0.05)
         await asyncio.sleep(0.1)
         assert await memory.exists("q") is False
         assert await memory.list_range("q") == []
@@ -234,7 +242,7 @@ class TestMemoryBackend:
         """type()：字符串 / 列表 / 哈希三种结构各报各的，不存在的键报 None。"""
         assert await memory.type("nope") is None
         await memory.set("s", "v")
-        await memory.list_push("q", "a")
+        await memory.list_push_right("q", "a")
         await memory.hash_set("h", {"f": "v"})
         assert await memory.type("s") == "string"
         assert await memory.type("q") == "list"
@@ -265,10 +273,10 @@ class TestMemoryBackend:
         """一个键只能按写入时的那种结构访问 —— 对应 Redis 的 WRONGTYPE。"""
         await memory.set("s", "v")
         with pytest.raises(CacheError, match="不能按 list"):
-            await memory.list_push("s", "a")
+            await memory.list_push_right("s", "a")
         with pytest.raises(CacheError, match="不能按 hash"):
             await memory.hash_get("s", "f")
-        await memory.list_push("l", "a")
+        await memory.list_push_right("l", "a")
         with pytest.raises(CacheError, match="不能按 string"):
             await memory.get("l")
         with pytest.raises(CacheError, match="不能按 string"):
@@ -277,13 +285,13 @@ class TestMemoryBackend:
     async def test_get_many_skips_non_string_keys(self, memory: Cache) -> None:
         """照 MGET 的脾气：别的类型当作没取到，不报错。"""
         await memory.set("s", "v")
-        await memory.list_push("l", "a")
+        await memory.list_push_right("l", "a")
         assert await memory.get_many(["s", "l", "nope"]) == {"s": "v"}
 
     async def test_structures_reject_non_string_items(self, memory: Cache) -> None:
         """元素 / 字段值必须是字符串：误把整个列表当元素塞进来会被拦下。"""
         with pytest.raises(CacheError, match="必须是字符串"):
-            await memory.list_push("q", ["a", "b"])  # pyright: ignore[reportArgumentType]
+            await memory.list_push_right("q", ["a", "b"])  # pyright: ignore[reportArgumentType]
         with pytest.raises(CacheError, match="必须是字符串"):
             await memory.hash_set("h", {"f": 1})  # pyright: ignore[reportArgumentType]
         assert await memory.exists("q") is False  # 报错就别留下半截数据
@@ -339,7 +347,7 @@ class TestFacade:
         facade = Cache(CacheOptions(default_ttl=5))
         await facade.start()
         try:
-            await facade.list_push("q", "a")
+            await facade.list_push_right("q", "a")
             await facade.hash_set("h", {"f": "v"})
             for key in ("q", "h"):
                 remaining = await facade.ttl(key)
@@ -450,11 +458,13 @@ class TestRedisBackend:
             assert await facade.incr("n") == 1
             assert await facade.delete("k") is True
             # 列表：一次性推、区间取、按弹出顺序弹
-            assert await facade.list_push("q", "a", "b", ttl=30) == 2
-            assert await facade.list_push("q", "c") == 3
+            assert await facade.list_push_right("q", "a", "b", ttl=30) == 2
+            assert await facade.list_push_right("q", "c") == 3
             assert await facade.list_range("q") == ["a", "b", "c"]
             assert await facade.list_range("q", -2, -1) == ["b", "c"]
-            assert await facade.list_pop("q", 2) == ["c", "b"]
+            assert await facade.list_pop_right("q", 2) == ["c", "b"]
+            assert await facade.list_push_left("q", "x")
+            assert await facade.list_pop_left("q") == ["x"]  # 从头弹：先出来的在最前
             assert await facade.list_length("q") == 1
             remaining = await facade.ttl("q")
             assert remaining is not None and 0 < remaining <= 30  # 新建时设上的 TTL 还在

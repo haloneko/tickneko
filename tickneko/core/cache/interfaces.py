@@ -76,15 +76,15 @@ class CacheBackend(Protocol):
         ...
 
     # ---- 列表（Redis 的 list）----
-    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
-        """从右侧推入元素（``list_push(key, "a", "b")``），返回推入后的长度。
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
+        """从右侧推入元素（``list_push_right(key, "a", "b")``），返回推入后的长度。
 
         ``ttl`` 只在键不存在时用；空推入当「问长度」，不建键。
         """
         ...
 
     async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
-        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push`。"""
+        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push_right`。"""
         ...
 
     async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
@@ -98,8 +98,15 @@ class CacheBackend(Protocol):
         """列表长度（键不存在算 0）。"""
         ...
 
-    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
         """从右侧弹出至多 ``count`` 个元素，按**弹出顺序**返回（最右侧的先出来）。
+
+        没得弹就返回空列表；弹空之后键就没了。
+        """
+        ...
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        """从左侧弹出至多 ``count`` 个元素，按**弹出顺序**返回（最左侧的先出来）。
 
         没得弹就返回空列表；弹空之后键就没了。
         """
