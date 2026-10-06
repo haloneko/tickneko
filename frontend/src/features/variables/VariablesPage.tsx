@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listVariables, VARIABLE_SCOPES, type VariableEntry } from './variablesApi'
 import { fetchOwners, type Owner } from '../../lib/ownersApi'
 import { useAuth } from '../auth/authStore'
-import { ownerName } from '../../common/OwnerFilter'
+import OwnerFilter, { ownerName } from '../../common/OwnerFilter'
 import { IconRefresh, IconVariables } from '../../common/icons'
 import { ListSkeleton } from '../../common/Skeleton'
 import ErrorBox from '../../common/ErrorBox'
@@ -175,21 +175,15 @@ export default function VariablesPage() {
           </label>
 
           {isAdmin && (
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>归属</span>
-              <select
-                className={styles.control}
-                value={draft.owner}
-                onChange={(e) => patchDraft({ owner: e.target.value })}
-              >
-                <option value="all">全部归属</option>
-                {owners.map((owner) => (
-                  <option key={owner.owner_id} value={owner.owner_id}>
-                    {ownerName(owner.owner_id, owners)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <OwnerFilter
+              owners={owners}
+              value={draft.owner}
+              onChange={(owner) => patchDraft({ owner })}
+              allValue="all"
+              allLabel="全部归属"
+              renderAlways
+              layout="vertical"
+            />
           )}
         </div>
 

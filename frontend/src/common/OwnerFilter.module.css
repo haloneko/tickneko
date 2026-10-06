@@ -27,3 +27,42 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+/* 竖排：label 在上、select 在下，观感对齐各筛选表单的 .field/.control */
+.wrapVertical {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.labelVertical {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.selectVertical {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  font-size: 13px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background-color: var(--surface);
+  color: var(--text-1);
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.selectVertical:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
