@@ -219,6 +219,13 @@ class TestMemoryBackend:
         expected = {"name": "阿一改", "age": "20", "city": "上海"}
         assert await memory.hash_get_all("user:1") == expected
         assert await memory.hash_get_all("nope") == {}
+        assert await memory.hash_exists("user:1", "name") is True
+        assert await memory.hash_exists("user:1", "nope") is False
+        assert await memory.hash_exists("nope", "f") is False  # 键不存在算 False
+        assert await memory.hash_length("user:1") == 3
+        assert await memory.hash_length("nope") == 0  # 键不存在算 0
+        assert await memory.hash_keys("user:1") == ["name", "age", "city"]
+        assert await memory.hash_keys("nope") == []
         assert await memory.hash_delete("user:1", "age", "nope") == 1
         assert await memory.hash_delete("user:1", "name", "city") == 2
         assert await memory.exists("user:1") is False  # 字段删空了键就没了

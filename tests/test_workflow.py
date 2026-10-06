@@ -3458,6 +3458,10 @@ async def test_api_node_types_catalog_matches_registry() -> None:
     assert nodes["send"]["category"] == "action"
     assert nodes["condition"]["category"] == "control"
     assert nodes["json"]["category"] == "data"
+    # 键值对系列 6 个节点单独一个分组（ds_dict），不和其他数据节点混在「数据」里
+    for set_type in ("ds-dict-set", "ds-dict-get", "ds-dict-contains", "ds-dict-remove", "ds-dict-keys", "ds-dict-length"):
+        assert nodes[set_type]["category"] == "ds_dict"
+    assert [c["label"] for c in payload["categories"] if c["name"] == "ds_dict"] == ["键值对"]
     # 平台专属节点按平台分类：会话解包 / 封装，onebot 归 onebot、kook 归 kook
     assert nodes["unpack-onebot"]["category"] == "onebot"
     assert nodes["unpack-kook"]["category"] == "kook"
