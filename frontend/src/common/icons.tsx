@@ -214,6 +214,14 @@ export const IconKey = (p: IconProps) => (
   </svg>
 )
 
+export const IconVariables = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M8.6 4.5c-1.7 0-2.5 1-2.5 2.7v1.9c0 1-.5 1.5-1.4 1.8v.2c.9.3 1.4.8 1.4 1.8v1.9c0 1.7.8 2.7 2.5 2.7" />
+    <path d="M15.4 4.5c1.7 0 2.5 1 2.5 2.7v1.9c0 1 .5 1.5 1.4 1.8v.2c-.9.3-1.4.8-1.4 1.8v1.9c0 1.7-.8 2.7-2.5 2.7" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+)
+
 export const IconPlus = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M12 5v14M5 12h14" />
