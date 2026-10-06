@@ -42,6 +42,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from tickneko import __version__
+from tickneko.core.cache import Cache
 from tickneko.core.logger import BaseLogger
 
 from .common.errors import register_exception_handlers
@@ -54,6 +55,7 @@ from .api import (
     onebot_router,
     owners_router,
     profile_router,
+    variables_router,
     workflow_router,
 )
 from .api.bots.protocols import BotsService
@@ -80,6 +82,7 @@ def create_app(
     bots: BotsService | None = None,
     workflow_store: WorkflowStoreLike | None = None,
     workflow_triggers: WorkflowTriggerLike | None = None,
+    cache: Cache | None = None,
     avatar_store: AvatarStore | None = None,
     title: str = "TickNeko",
     version: str = __version__,
@@ -108,6 +111,9 @@ def create_app(
     :param workflow_triggers: 工作流的运行时触发器（只认
         :class:`~tickneko.api.api.workflow.protocols.WorkflowTriggerLike`）；传了以后拨运行开关
         **即时启停**，没传时开关只落库、效果等下次启动载入（主程序会传，见 ``tickneko.bootstrap``）；
+    :param cache: 缓存门面（``tickneko.core.cache.Cache``，主程序传的就是业务在用的那份进程级
+        单例）；传了 ``<prefix>/variables``（变量查看）才可用，没传时这些接口回 503
+        ——变量全在缓存里，没有它连「有多少变量」都答不了；
     :param avatar_store: 头像存储（只认
         :class:`~tickneko.api.services.profile.protocols.AvatarStore` 协议）；默认是落本地目录的
         :class:`~tickneko.api.services.profile.FileAvatarStore`，目录取选项里的 ``avatar_dir``
@@ -213,6 +219,7 @@ def create_app(
     app.include_router(owners_router, prefix=chosen.prefix)
     app.include_router(log_router, prefix=chosen.prefix)
     app.include_router(workflow_router, prefix=chosen.prefix)
+    app.include_router(variables_router, prefix=chosen.prefix)
 
     # 依赖注入：服务在这一层建好挂上去（换存储 / 换算法只改这一处）
     app.state.auth_service = AuthService(
@@ -235,6 +242,8 @@ def create_app(
     app.state.workflow_store = workflows_store
     # 运行时触发器（可空）：拨运行开关时即时启停，没传就只落库
     app.state.workflow_triggers = workflow_triggers
+    # 缓存门面（可空）：<prefix>/variables 拿它列变量；没传时那组接口回 503
+    app.state.cache = cache
     # 个人设置（改昵称 + 头像）：<prefix>/profile/* 用
     app.state.profile_service = profile_service
     return app

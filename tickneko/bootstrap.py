@@ -343,6 +343,9 @@ async def run(
                     event_router=_event_router,
                 ),
                 workflow_store=workflows,
+                # 缓存门面：<prefix>/variables（变量查看）拿它列工作流变量；传的就是本进程
+                # 正在用的那份单例（上面已 configure + start），读到的与业务是同一份数据
+                cache=cache,
             ),
             host=api_host,
             port=api_port,
