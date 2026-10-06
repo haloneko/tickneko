@@ -8,6 +8,7 @@ import {
   IconRobot,
   IconSettings,
   IconTerminal,
+  IconVariables,
 } from '../../common/icons'
 
 export interface NavItem {
@@ -26,6 +27,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/sessions', label: '登录设备', icon: IconDevices },
   { path: '/bots', label: '机器人', icon: IconRobot },
   { path: '/workflows', label: '工作流', icon: IconBolt },
+  { path: '/variables', label: '变量查看', icon: IconVariables },
   { path: '/logs', label: '运行日志', icon: IconLogs },
   { path: '/debug', label: 'WS 调试', icon: IconTerminal },
   { path: '/profile', label: '个人设置', icon: IconSettings },

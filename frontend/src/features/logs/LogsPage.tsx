@@ -9,16 +9,20 @@
  * - 响应带 total，底部走通用分页条（`common/Pagination`）：页码 + 首尾 / 上下页 + 跳页，
  *   每页条数 20/50/100/200；筛选条件 / 每页条数一变就回到第 1 页，数据变少时页码自动收口；
  * - 可选 10 秒自动刷新：静默重拉当前页（新日志本来就出现在最前），不闪骨架屏。
+ *
+ * 分页 / 防旧响应覆盖 / 错误归一 / 页码越界收口都在 `common/usePagedQuery`，这里只管
+ * 筛选字段（草稿 vs 已生效）、展开态、自动刷新，以及行怎么渲染。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { searchLogs, LOG_LEVELS, type LogEntry } from './logsApi'
 import { fetchOwners, type Owner } from '../../lib/ownersApi'
-import { ApiRequestError } from '../../lib/http'
 import { useAuth } from '../auth/authStore'
-import { ownerName } from '../../common/OwnerFilter'
+import OwnerFilter, { ownerName } from '../../common/OwnerFilter'
 import { IconRefresh, IconChevronDown, IconAlert, IconClock } from '../../common/icons'
 import { ListSkeleton } from '../../common/Skeleton'
-import Pagination, { totalPagesOf } from '../../common/Pagination'
+import ErrorBox from '../../common/ErrorBox'
+import { usePagedQuery } from '../../common/usePagedQuery'
+import Pagination from '../../common/Pagination'
 import styles from './LogsPage.module.css'
 
 /** 每页条数可选项；后端单次上限 500，这里给几档常用值。 */
@@ -81,32 +85,18 @@ export default function LogsPage() {
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS)
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS)
 
-  const [entries, setEntries] = useState<LogEntry[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<{ title: string; detail?: string; traceId?: string } | null>(
-    null,
-  )
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
   /** 可选归属：归属下拉直接列人（管理员才用得上；拉不到就只剩「全部 / 仅公共」） */
   const [owners, setOwners] = useState<Owner[]>([])
 
-  // 请求序号：每次拉取自增，只有「最新一次」的结果会被采用（旧响应丢弃，不盖新页面）
-  const requestSeq = useRef(0)
-
   const patchDraft = (patch: Partial<Filters>) =>
     setDraft((prev) => ({ ...prev, ...patch }))
 
-  /** 把已生效筛选与页码翻译成后端参数（offset 由页码与每页条数算出来）。 */
+  /** 把已生效筛选翻译成后端参数：limit/offset 由 hook 按页码算好，这里只塞筛选字段。 */
   const buildParams = useCallback(
-    (filters: Filters, targetPage: number, size: number) => {
-      const params: Record<string, string | number> = {
-        limit: size,
-        offset: (targetPage - 1) * size,
-      }
+    (filters: Filters, base: { limit: number; offset: number }) => {
+      const params: Record<string, string | number> = { ...base }
       if (filters.level) params.level = filters.level
       const q = filters.query.trim()
       if (q) params.query = q
@@ -128,86 +118,48 @@ export default function LogsPage() {
     [isAdmin],
   )
 
-  /** 拉某一页日志。silent=true 用于自动刷新：不闪骨架屏，失败也不清空已有列表。 */
-  const fetchLogs = useCallback(
-    async (filters: Filters, targetPage: number, size: number, silent = false) => {
-      const seq = requestSeq.current + 1
-      requestSeq.current = seq
-      if (!silent) setLoading(true)
-      try {
-        const res = await searchLogs(buildParams(filters, targetPage, size))
-        if (seq !== requestSeq.current) return // 已有更新的请求在飞，这次结果作废
-        setEntries(res.data.items)
-        setTotal(res.data.total)
-        setError(null)
-      } catch (err) {
-        if (seq !== requestSeq.current) return
-        if (!silent) {
-          setEntries([])
-          setTotal(0)
-          if (err instanceof ApiRequestError) {
-            if (err.status === 503) {
-              // 503 是「这个来源没挂出口」：具体是哪一类、该怎么配由后端说（落库 / 文件各有一套），
-              // 前端别自己写死一句「没落库」—— 用户选的可能是「本机文件」。
-              setError({
-                title: '这个来源查不了',
-                detail: err.message,
-                traceId: err.traceId,
-              })
-            } else {
-              setError({ title: err.message, traceId: err.traceId })
-            }
-          } else {
-            setError({ title: err instanceof Error ? err.message : '日志加载失败' })
-          }
-        }
-      } finally {
-        if (seq === requestSeq.current) setLoading(false)
-      }
-    },
-    [buildParams],
-  )
+  const query = usePagedQuery<LogEntry, Filters>({
+    applied,
+    buildParams,
+    fetchPage: (params) => searchLogs(params).then((res) => res.data),
+    defaultPageSize: DEFAULT_PAGE_SIZE,
+    fallbackErrorTitle: '日志加载失败',
+    notAvailableTitle: '这个来源查不了',
+  })
 
-  // 首次加载 + 已生效查询 / 页码 / 每页条数任一变化就重拉：翻页与改条数都走这里
-  useEffect(() => {
-    void fetchLogs(applied, page, pageSize)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applied, page, pageSize])
-
-  // 自动刷新：固定间隔静默重拉当前页（不闪骨架屏）
+  // 自动刷新：固定间隔静默重拉当前页（不闪骨架屏，失败也不清列表）
   useEffect(() => {
     if (!autoRefresh) return
     const timer = window.setInterval(() => {
-      void fetchLogs(applied, page, pageSize, true)
+      query.refresh(true)
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [autoRefresh, applied, page, pageSize, fetchLogs])
+  }, [autoRefresh, query.refresh])
 
   function submitSearch(event: React.FormEvent) {
     event.preventDefault()
     setExpandedId(null)
-    setPage(1) // 条件变了就从第 1 页看起
+    query.setPage(1) // 条件变了就从第 1 页看起
     setApplied({ ...draft })
   }
 
   function resetFilters() {
     setDraft(EMPTY_FILTERS)
     setExpandedId(null)
-    setPage(1)
+    query.setPage(1)
     setApplied({ ...EMPTY_FILTERS })
   }
 
-  /** 跳到某页：清掉展开态，页码一变 effect 就会去拉那一页。 */
+  /** 跳到某页：清掉展开态（页码一变 hook 就会去拉那一页）。 */
   function goToPage(target: number) {
     setExpandedId(null)
-    setPage(target)
+    query.setPage(target)
   }
 
-  /** 改每页条数：回到第 1 页（否则 offset 会落到不存在的位置）。 */
+  /** 改每页条数：清掉展开态并回到第 1 页（否则 offset 会落到不存在的位置）。 */
   function changePageSize(size: number) {
     setExpandedId(null)
-    setPage(1)
-    setPageSize(size)
+    query.setPageSize(size)
   }
 
   const activeFilterCount = useMemo(() => {
@@ -231,13 +183,6 @@ export default function LogsPage() {
       .then(({ data }) => setOwners(data))
       .catch(() => undefined)
   }, [isAdmin])
-
-  const totalPages = totalPagesOf(total, pageSize)
-
-  // 数据变少（比如自动刷新时旧日志被清理）会让当前页越界：收口到最后一页，别停在空白页
-  useEffect(() => {
-    setPage((current) => (current > totalPages ? totalPages : current))
-  }, [totalPages])
 
   return (
     <div className={styles.page}>
@@ -264,10 +209,10 @@ export default function LogsPage() {
           <button
             type="button"
             className="btn"
-            onClick={() => void fetchLogs(applied, page, pageSize)}
-            disabled={loading}
+            onClick={() => query.refresh(false)}
+            disabled={query.loading}
           >
-            <IconRefresh size={15} className={loading ? styles.spin : undefined} />
+            <IconRefresh size={15} className={query.loading ? styles.spin : undefined} />
             刷新
           </button>
         </div>
@@ -316,22 +261,16 @@ export default function LogsPage() {
 
           {isAdmin && (
             <>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>归属</span>
-                <select
-                  className={styles.control}
-                  value={draft.owner}
-                  onChange={(e) => patchDraft({ owner: e.target.value })}
-                >
-                  <option value="all">全部归属</option>
-                  <option value="public">仅公共日志</option>
-                  {owners.map((owner) => (
-                    <option key={owner.owner_id} value={owner.owner_id}>
-                      {ownerName(owner.owner_id, owners)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <OwnerFilter
+                owners={owners}
+                value={draft.owner}
+                onChange={(owner) => patchDraft({ owner })}
+                allValue="all"
+                allLabel="全部归属"
+                extraOptions={[{ value: 'public', label: '仅公共日志' }]}
+                renderAlways
+                layout="vertical"
+              />
 
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>来源</span>
@@ -371,14 +310,14 @@ export default function LogsPage() {
         </div>
 
         <div className={styles.filterActions}>
-          <button type="submit" className="btn btn-primary" disabled={loading}>
+          <button type="submit" className="btn btn-primary" disabled={query.loading}>
             查询
           </button>
           <button
             type="button"
             className="btn"
             onClick={resetFilters}
-            disabled={loading || activeFilterCount === 0}
+            disabled={query.loading || activeFilterCount === 0}
           >
             重置
           </button>
@@ -390,28 +329,11 @@ export default function LogsPage() {
 
       {/* 结果区 */}
       <section className={`card ${styles.listCard}`}>
-        {loading ? (
+        {query.loading ? (
           <ListSkeleton rows={6} />
-        ) : error ? (
-          <div className={styles.errorBox} role="alert">
-            <IconAlert size={20} className={styles.errorIcon} />
-            <div className={styles.errorBody}>
-              <div className={styles.errorTitle}>{error.title}</div>
-              {error.detail && <div className={styles.errorDetail}>{error.detail}</div>}
-              {error.traceId && (
-                <div className={styles.errorTrace}>trace · {error.traceId}</div>
-              )}
-              <button
-                type="button"
-                className={`btn ${styles.retryBtn}`}
-                onClick={() => void fetchLogs(applied, page, pageSize)}
-              >
-                <IconRefresh size={14} />
-                重试
-              </button>
-            </div>
-          </div>
-        ) : entries.length === 0 ? (
+        ) : query.error ? (
+          <ErrorBox error={query.error} onRetry={() => query.refresh(false)} />
+        ) : query.items.length === 0 ? (
           <div className="state-box">
             <IconAlert size={18} className={styles.stateIcon} />
             没有符合条件的日志
@@ -419,7 +341,7 @@ export default function LogsPage() {
         ) : (
           <>
             <ul className={styles.list}>
-              {entries.map((entry) => {
+              {query.items.map((entry) => {
                 const hasDetail =
                   !!entry.exc_text || Object.keys(entry.extra).length > 0
                 const expanded = expandedId === entry.record_id
@@ -488,13 +410,13 @@ export default function LogsPage() {
             </ul>
 
             <Pagination
-              page={page}
-              pageSize={pageSize}
-              total={total}
+              page={query.page}
+              pageSize={query.pageSize}
+              total={query.total}
               onChange={goToPage}
               pageSizeOptions={PAGE_SIZE_OPTIONS}
               onPageSizeChange={changePageSize}
-              disabled={loading}
+              disabled={query.loading}
               className={styles.pager}
             />
           </>

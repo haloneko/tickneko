@@ -10,6 +10,7 @@ import TokensPage from '../features/tokens/TokensPage'
 import LogsPage from '../features/logs/LogsPage'
 import DebugPage from '../features/onebot/DebugPage'
 import WorkflowPage from '../features/workflow/WorkflowPage'
+import VariablesPage from '../features/variables/VariablesPage'
 import ProfilePage from '../features/auth/ProfilePage'
 
 export default function AppRouter() {
@@ -24,6 +25,7 @@ export default function AppRouter() {
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/bots" element={<TokensPage />} />
           <Route path="/workflows" element={<WorkflowPage />} />
+          <Route path="/variables" element={<VariablesPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/debug" element={<DebugPage />} />
           <Route path="/profile" element={<ProfilePage />} />

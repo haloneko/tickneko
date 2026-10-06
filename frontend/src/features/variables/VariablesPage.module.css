@@ -1,0 +1,226 @@
+/* 变量查看页样式。颜色全部走设计令牌，明 / 暗主题自动适配。 */
+
+.page {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- 头部 ---------- */
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.sub {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-3);
+  max-width: 680px;
+}
+.headActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.spin {
+  animation: var-spin 1s linear infinite;
+}
+@keyframes var-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- 筛选栏 ---------- */
+.filterCard {
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.filterGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px 14px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.fieldLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.control {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.control::placeholder {
+  color: var(--text-3);
+}
+.control:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+select.control {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) 52%,
+    calc(100% - 11px) 52%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+
+.filterActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.filterCount {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---------- 列表 ---------- */
+.listCard {
+  padding: 0 18px;
+  overflow: hidden;
+}
+.stateIcon {
+  opacity: 0.45;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.list li:last-child .row {
+  border-bottom: none;
+}
+
+/* 作用域徽标：图级走强调色，账号级走中性色 */
+.scopeBadge {
+  flex-shrink: 0;
+  text-align: center;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+.scopeBadge[data-scope='graph'] {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.rowMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.key {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  word-break: break-all;
+}
+.ownerChip {
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.ownerUnknown {
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.workflow {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 7px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ttl {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.value {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ---------- 分页 ---------- */
+/* 分页条本体样式在 common/Pagination.module.css，这里只调它在列表卡片里的位置 */
+.pager {
+  margin: 0 -18px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+}
+
