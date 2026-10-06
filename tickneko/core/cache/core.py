@@ -157,6 +157,10 @@ class Cache:
         """剩余存活秒数；``None`` = 键不存在，``math.inf`` = 永不过期。"""
         return await self._require().ttl(key)
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型（``"string"`` / ``"list"`` / ``"hash"``）；不存在返回 ``None``。"""
+        return await self._require().type(key)
+
     async def incr(self, key: str, amount: int = 1) -> int:
         """原子自增（键不存在时从 0 起算），返回自增后的值。"""
         return await self._require().incr(key, amount)

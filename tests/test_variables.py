@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
@@ -154,6 +155,25 @@ class TestVariables:
         page = page_of(await env.client.get(VARIABLES_PATH, headers=auth(plain_token)))
         assert page["total"] == 1
         assert [item["owner_id"] for item in page["items"]] == [plain_id]
+
+    async def test_hash_and_list_variables_are_readable(self, env: Env) -> None:
+        """哈希 / 列表变量照常展示：hash 走 hash_get_all、list 走 list_range，都序列化成 JSON 文本。
+
+        以前只认字符串键，对哈希发 ``GET`` 会撞 WRONGTYPE 把整页打成 500 —— 现在三种结构都能看。
+        """
+        admin_token, admin_id = await login(env.client, ADMIN)
+        await env.cache.set(f"workflow:acct:{admin_id}:开关", "开")
+        await env.cache.hash_set(
+            f"workflow:acct:{admin_id}:配置", {"主题色": "蓝", "模式": "夜间"}
+        )
+        await env.cache.list_push(f"workflow:acct:{admin_id}:队列", "A", "B")
+
+        page = page_of(await env.client.get(VARIABLES_PATH, headers=auth(admin_token)))
+        assert page["total"] == 3
+        rows = {item["key"]: item for item in page["items"]}
+        assert rows["开关"]["value"] == "开"
+        assert json.loads(rows["配置"]["value"]) == {"主题色": "蓝", "模式": "夜间"}
+        assert json.loads(rows["队列"]["value"]) == ["A", "B"]
 
     async def test_plain_user_cannot_ask_for_someone_else(self, env: Env) -> None:
         """普通用户显式写别人的归属 -> 403（和日志 / 工作流列表一个口径）。"""

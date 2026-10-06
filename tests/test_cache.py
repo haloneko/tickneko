@@ -230,6 +230,16 @@ class TestMemoryBackend:
         assert await memory.hash_delete("user:1", "name", "city") == 2
         assert await memory.exists("user:1") is False  # 字段删空了键就没了
 
+    async def test_type_reports_structure_kind(self, memory: Cache) -> None:
+        """type()：字符串 / 列表 / 哈希三种结构各报各的，不存在的键报 None。"""
+        assert await memory.type("nope") is None
+        await memory.set("s", "v")
+        await memory.list_push("q", "a")
+        await memory.hash_set("h", {"f": "v"})
+        assert await memory.type("s") == "string"
+        assert await memory.type("q") == "list"
+        assert await memory.type("h") == "hash"
+
     async def test_hash_get_all_returns_copy(self, memory: Cache) -> None:
         """拿回来的是一份拷贝：外面改了不该影响缓存里的。"""
         await memory.hash_set("h", {"f": "v"})
@@ -456,6 +466,10 @@ class TestRedisBackend:
             # JSON 与类型不匹配（Redis 那边报 WRONGTYPE，翻成同一个异常）
             await facade.set_json("j", {"tags": ["a", "b"]})
             assert await facade.get_json("j") == {"tags": ["a", "b"]}
+            assert await facade.type("n") == "string"  # 自增建的键
+            assert await facade.type("q") == "list"
+            assert await facade.type("h") == "hash"
+            assert await facade.type("nope") is None  # 不存在的键报 None
             with pytest.raises(CacheError):
                 await facade.incr("q")  # 列表键不能按字符串用
         finally:

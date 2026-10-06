@@ -223,6 +223,11 @@ class MemoryCache:
             return math.inf
         return max(0.0, entry.deadline - time.monotonic())
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型（``"string"`` / ``"list"`` / ``"hash"``）；不存在返回 ``None``。"""
+        entry = self._find(key)
+        return None if entry is None else entry.kind
+
     async def get_many(self, keys: Sequence[str]) -> dict[str, str]:
         # 照 Redis 的 MGET：非字符串类型的键当作没取到，不报 WRONGTYPE
         found: dict[str, str] = {}

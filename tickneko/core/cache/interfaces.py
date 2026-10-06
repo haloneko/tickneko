@@ -51,6 +51,14 @@ class CacheBackend(Protocol):
         """剩余存活秒数；``None`` = 键不存在，``math.inf`` = 永不过期。"""
         ...
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型：``"string"`` / ``"list"`` / ``"hash"``；键不存在返回 ``None``。
+
+        给「枚举键后想按结构读取」的调用方用（如变量查看：hash 走 hash_get_all，
+        别对哈希发 ``GET`` 撞 WRONGTYPE）。不抛异常，不存在就是不存在。
+        """
+        ...
+
     async def incr(self, key: str, amount: int = 1) -> int:
         """原子自增（键不存在时从 0 起算），返回自增后的值；值不是整数则抛 CacheError。"""
         ...

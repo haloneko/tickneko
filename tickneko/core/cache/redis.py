@@ -107,6 +107,11 @@ class RedisCache:
             return None if seconds == -2 else float("inf")
         return seconds
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型（``"string"`` / ``"list"`` / ``"hash"``）；不存在返回 ``None``。"""
+        raw = await self._call("type", self._full(key))
+        return None if raw == "none" else str(raw)
+
     async def incr(self, key: str, amount: int = 1) -> int:
         return int(await self._call("incrby", self._full(key), amount))
 
