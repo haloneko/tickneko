@@ -1,4 +1,4 @@
-"""数据结构节点（键值对系列 ds-dict-* / ds-container）的测试：直接调 exec + 注入假缓存门面。
+"""数据结构节点（键值对系列 ds-dict-* / 列表队列系列 ds-list-*）的测试：直接调 exec + 注入假缓存门面。
 
 单元测试不碰进程级缓存单例（它没 ``start()``，直接调会抛 ``CacheError``）—— 给 ctx 注入
 ``_FakeCache``（鸭子形状对齐 ``tickneko.core.cache.Cache`` 的 ``get_json`` / ``set_json``）即可。
@@ -16,31 +16,98 @@ from tickneko.workflow import (
 )
 from tickneko.workflow.nodes import (
     NodeFailure,
-    exec_ds_container,
     exec_ds_dict_contains,
     exec_ds_dict_get,
     exec_ds_dict_keys,
     exec_ds_dict_length,
     exec_ds_dict_remove,
     exec_ds_dict_set,
+    exec_ds_list_append,
+    exec_ds_list_contains,
+    exec_ds_list_get,
+    exec_ds_list_length,
+    exec_ds_list_pop,
+    exec_ds_list_pop_left,
+    exec_ds_list_push_left,
 )
 
 
 # --------------------------------------------------------------------------- 假缓存门面
 class _FakeCache:
-    """假缓存门面：对齐 ds 系列节点用到的 ``get_json`` / ``set_json`` / ``hash_*``。"""
+    """假缓存门面：对齐 ds 系列节点用到的 ``list_*`` / ``hash_*`` 原子操作。"""
 
     def __init__(self) -> None:
         self.data: dict[str, object] = {}
 
-    async def set_json(self, key: str, value: object) -> None:
-        self.data[key] = value
-
-    async def get_json(self, key: str) -> object | None:
-        return self.data.get(key)
-
     async def exists(self, key: str) -> bool:
         return key in self.data
+
+    async def delete(self, key: str) -> bool:
+        return self.data.pop(key, None) is not None
+
+    # ---- 列表（对齐 RPUSH/LPUSH/LRANGE/LLEN/RPOP/LPOP，桩用 list 模拟）----
+    def _list_entry(self, key: str) -> list[str] | None:
+        entry = self.data.get(key)
+        if entry is None:
+            return None
+        if not isinstance(entry, list):  # 模拟真实后端的 WRONGTYPE
+            raise CacheError(f"键 {key} 存的是 {type(entry).__name__}，不能按 list 访问")
+        return entry
+
+    @staticmethod
+    def _slice(items: list[str], start: int, stop: int) -> list[str]:
+        """LRANGE 语义：两端都含、负数从右数、越界自动裁剪。"""
+        length = len(items)
+        begin = start + length if start < 0 else start
+        end = stop + length if stop < 0 else stop
+        begin = max(0, min(begin, length))
+        end = max(0, min(end + 1, length))
+        return items[begin:end] if begin < end else []
+
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
+        entry = self._list_entry(key)
+        if entry is None:
+            entry = []
+            self.data[key] = entry
+        entry.extend(values)
+        return len(entry)
+
+    async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
+        entry = self._list_entry(key)
+        if entry is None:
+            entry = []
+            self.data[key] = entry
+        for value in reversed(values):
+            entry.insert(0, value)
+        return len(entry)
+
+    async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
+        entry = self._list_entry(key)
+        return [] if entry is None else self._slice(entry, start, stop)
+
+    async def list_length(self, key: str) -> int:
+        entry = self._list_entry(key)
+        return 0 if entry is None else len(entry)
+
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
+        entry = self._list_entry(key)
+        if entry is None or count <= 0:
+            return []
+        take = min(count, len(entry))
+        popped = [entry.pop() for _ in range(take)]
+        if not entry:
+            self.data.pop(key, None)
+        return popped
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        entry = self._list_entry(key)
+        if entry is None or count <= 0:
+            return []
+        take = min(count, len(entry))
+        popped = [entry.pop(0) for _ in range(take)]
+        if not entry:
+            self.data.pop(key, None)
+        return popped
 
     # ---- 哈希（ds 系列节点改为服务端原子操作，桩用普通 dict 模拟）----
     def _hash_entry(self, key: str) -> dict[str, str] | None:
@@ -468,155 +535,168 @@ async def test_ds_dict_contains_trigger_port_always_fires() -> None:
     assert "[test] tal" in log and "[skip] ta" in log and "[test] tb" in log
 
 
-# --------------------------------------------------------------------------- ⑤ ds-container：list 组
+# --------------------------------------------------------------------------- ⑤ ds-list：列表队列系列
 @pytest.mark.asyncio
-async def test_ds_container_list_append_get_contains_remove_length() -> None:
-    """列表的整套操作：追加 / 按下标取 / 存在检测 / 删除 / 长度；越界取送默认值。"""
+async def test_ds_list_append_get_contains_length() -> None:
+    """队列核心操作（各是一个节点）：追加（计数+1）/ 按下标取 / contains 走索引 O(1) / 长度算 list。"""
     fake = _FakeCache()
     ctx = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_append", "key": "队列"})
+    node_ = WorkflowNode(id="c1", type="ds-list-append", config={"key": "队列"})
     ctx.inputs = {"item": "A"}
-    assert (await exec_ds_container(node_, ctx))["list_out"] == ["A"]
+    assert (await exec_ds_list_append(node_, ctx))["obj_out"] == "队列"
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "1"}  # 加元素计数+1
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1"}  # 索引同步+1
     ctx.inputs = {"item": "B"}
-    assert (await exec_ds_container(node_, ctx))["list_out"] == ["A", "B"]
+    assert (await exec_ds_list_append(node_, ctx))["obj_out"] == "队列"
     assert fake.data["workflow:graph:w1:队列"] == ["A", "B"]
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "2"}
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1", "B": "1"}
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_get", "key": "队列"})
+    node_ = WorkflowNode(id="c1", type="ds-list-get", config={"key": "队列"})
     ctx.inputs = {"index": "0"}
-    assert (await exec_ds_container(node_, ctx))["value_out"] == "A"
+    assert (await exec_ds_list_get(node_, ctx))["value_out"] == "A"
     ctx.inputs = {"index": "-1"}  # 负数从后往前
-    assert (await exec_ds_container(node_, ctx))["value_out"] == "B"
+    assert (await exec_ds_list_get(node_, ctx))["value_out"] == "B"
     ctx.inputs = {"index": "9", "default": "没有"}
-    assert (await exec_ds_container(node_, ctx))["value_out"] == "没有"
+    assert (await exec_ds_list_get(node_, ctx))["value_out"] == "没有"
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_contains", "key": "队列"})
+    node_ = WorkflowNode(id="c1", type="ds-list-contains", config={"key": "队列"})
     ctx.inputs = {"item": "A"}
-    assert (await exec_ds_container(node_, ctx))["flag"] == "true"
+    assert (await exec_ds_list_contains(node_, ctx))["flag"] == "true"  # O(1)，走索引
     ctx.inputs = {"item": "C"}
-    assert (await exec_ds_container(node_, ctx))["flag"] == "false"
+    assert (await exec_ds_list_contains(node_, ctx))["flag"] == "false"
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_remove", "key": "队列"})
-    ctx.inputs = {"index": "0"}
-    assert (await exec_ds_container(node_, ctx))["list_out"] == ["B"]
-    ctx.inputs = {"index": "9"}  # 越界：不删，流程继续
-    assert (await exec_ds_container(node_, ctx))["list_out"] == ["B"]
-
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_length", "key": "队列"})
-    assert (await exec_ds_container(node_, ctx))["count"] == "1"
+    node_ = WorkflowNode(id="c1", type="ds-list-length", config={"key": "队列"})
+    assert (await exec_ds_list_length(node_, ctx))["count"] == "2"  # 长度算 list，不读计数
 
 
-# --------------------------------------------------------------------------- ⑨ ds-container：map 组
 @pytest.mark.asyncio
-async def test_ds_container_map_set_get_contains_remove_keys_length() -> None:
-    """字典的整套操作：写 / 读 / 存在检测 / 删 / 键列表 / 条目数；键不存在取送默认值。"""
+async def test_ds_list_double_ended_push_pop() -> None:
+    """双端操作：头部插入 / 尾部弹出 / 头部弹出；弹空不算事故，送默认值。"""
     fake = _FakeCache()
     ctx = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_set", "key": "配置"})
-    ctx.inputs = {"field": "主题色", "value": "蓝"}
-    assert (await exec_ds_container(node_, ctx))["dict_out"] == {"主题色": "蓝"}
-    ctx.inputs = {"field": "字号", "value": 14}  # 整数照旧文本化
-    assert (await exec_ds_container(node_, ctx))["dict_out"] == {"主题色": "蓝", "字号": "14"}
-    assert fake.data["workflow:graph:w1:配置"] == {"主题色": "蓝", "字号": "14"}
+    node_ = WorkflowNode(id="c1", type="ds-list-append", config={"key": "队列"})
+    for item in ("A", "B"):
+        ctx.inputs = {"item": item}
+        _ = await exec_ds_list_append(node_, ctx)
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "2"}
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1", "B": "1"}
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_get", "key": "配置"})
-    ctx.inputs = {"field": "主题色"}
-    assert (await exec_ds_container(node_, ctx))["value_out"] == "蓝"
-    ctx.inputs = {"field": "不存在的", "default": "兜底"}
-    assert (await exec_ds_container(node_, ctx))["value_out"] == "兜底"
+    node_ = WorkflowNode(id="c1", type="ds-list-push-left", config={"key": "队列"})
+    ctx.inputs = {"item": "0"}
+    assert (await exec_ds_list_push_left(node_, ctx))["obj_out"] == "队列"
+    assert fake.data["workflow:graph:w1:队列"] == ["0", "A", "B"]
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "3"}  # 头插也计数+1
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"0": "1", "A": "1", "B": "1"}
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_contains", "key": "配置"})
-    ctx.inputs = {"field": "字号"}
-    assert (await exec_ds_container(node_, ctx))["flag"] == "true"
+    node_ = WorkflowNode(id="c1", type="ds-list-pop-left", config={"key": "队列"})
+    assert (await exec_ds_list_pop_left(node_, ctx))["value_out"] == "0"  # 队头弹出
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "2"}  # 弹出计数-1
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1", "B": "1"}  # 索引归零才删
+    node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
+    assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "B"  # 队尾弹出
+    assert fake.data["workflow:graph:w1:队列"] == ["A"]
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "1"}
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1"}
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_remove", "key": "配置"})
-    ctx.inputs = {"field": "字号"}
-    assert (await exec_ds_container(node_, ctx))["dict_out"] == {"主题色": "蓝"}
+    # 弹空不算事故：送默认值，流程继续（计数不跌到负、索引不误删）
+    node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
+    assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "A"
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "0"}
+    assert "workflow:graph:w1:队列:idx" not in fake.data  # 索引删空后键整个没了
+    ctx.inputs = {"default": "空了"}
+    assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "空了"
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "0"}
+    assert "workflow:graph:w1:队列:idx" not in fake.data
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_keys", "key": "配置"})
-    assert (await exec_ds_container(node_, ctx))["list_out"] == ["主题色"]
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_length", "key": "配置"})
-    assert (await exec_ds_container(node_, ctx))["count"] == "1"
-
-
-# --------------------------------------------------------------------------- ⑩ ds-container：失败语义与校验
 @pytest.mark.asyncio
-async def test_ds_container_raises_node_failure_on_wrong_container_type() -> None:
-    """list 动作读到字典 / map 动作读到列表 -> 业务失败（NodeFailure）。"""
+async def test_ds_list_contains_survives_duplicate_items() -> None:
+    """list 允许重复：索引记**出现次数**，弹掉一个还剩一个时 contains 不误报。"""
+    fake = _FakeCache()
+    ctx = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
+
+    node_ = WorkflowNode(id="c1", type="ds-list-append", config={"key": "队列"})
+    for item in ("A", "A"):
+        ctx.inputs = {"item": item}
+        _ = await exec_ds_list_append(node_, ctx)
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "2"}
+
+    node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
+    assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "A"
+    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1"}  # 次数 2->1，索引还在
+
+    node_ = WorkflowNode(id="c1", type="ds-list-contains", config={"key": "队列"})
+    ctx.inputs = {"item": "A"}
+    assert (await exec_ds_list_contains(node_, ctx))["flag"] == "true"  # 还剩一个，不误报
+
+    node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
+    assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "A"
+    node_ = WorkflowNode(id="c1", type="ds-list-contains", config={"key": "队列"})
+    ctx.inputs = {"item": "A"}
+    assert (await exec_ds_list_contains(node_, ctx))["flag"] == "false"  # 弹空才消失
+
+
+# --------------------------------------------------------------------------- ⑨ ds-list：失败语义与校验
+@pytest.mark.asyncio
+async def test_ds_list_raises_node_failure_on_wrong_container_type() -> None:
+    """list 动作读到字典 -> 业务失败（NodeFailure）。"""
     fake = _FakeCache()
     ctx = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
     fake.data["workflow:graph:w1:混用"] = {"a": 1}
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_length", "key": "混用"})
+    node_ = WorkflowNode(id="c1", type="ds-list-length", config={"key": "混用"})
     with pytest.raises(NodeFailure, match="不是列表"):
-        _ = await exec_ds_container(node_, ctx)
-
-    fake.data["workflow:graph:w1:混用"] = [1, 2]
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_length", "key": "混用"})
-    with pytest.raises(NodeFailure, match="不是字典"):
-        _ = await exec_ds_container(node_, ctx)
+        _ = await exec_ds_list_length(node_, ctx)
 
 
 @pytest.mark.asyncio
-async def test_ds_container_raises_on_bad_index_field_or_enums() -> None:
-    """格式错当场抛：index 不是整数 / field 空 / key 空 / 非法动作、作用域。"""
+async def test_ds_list_raises_on_bad_index_or_enums() -> None:
+    """格式错当场抛：index 不是整数 / key 空 / 作用域不合法。"""
     fake = _FakeCache()
     ctx = NodeExecutionContext(owner_id="u-admin", workflow_id="w1", cache=fake)
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_get", "key": "x"})
+    node_ = WorkflowNode(id="c1", type="ds-list-get", config={"key": "x"})
     ctx.inputs = {"index": "abc"}
     with pytest.raises(ValueError, match="不是整数"):
-        _ = await exec_ds_container(node_, ctx)
+        _ = await exec_ds_list_get(node_, ctx)
 
     ctx.inputs = {"index": ""}
     with pytest.raises(ValueError, match="index 为空"):
-        _ = await exec_ds_container(node_, ctx)
+        _ = await exec_ds_list_get(node_, ctx)
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_get", "key": "x"})
-    ctx.inputs = {"field": ""}
-    with pytest.raises(ValueError, match="field"):
-        _ = await exec_ds_container(node_, ctx)
-
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_get"})
+    node_ = WorkflowNode(id="c1", type="ds-list-get")
     ctx.inputs = {"key": ""}
     with pytest.raises(ValueError, match="key 为空"):
-        _ = await exec_ds_container(node_, ctx)
+        _ = await exec_ds_list_get(node_, ctx)
 
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "list_遍历", "key": "x"})
-    with pytest.raises(ValueError, match="动作不合法"):
-        _ = await exec_ds_container(node_, ctx)
-
-    node_ = WorkflowNode(id="c1", type="ds-container", config={"action": "map_get", "scope": "全局", "key": "x"})
+    node_ = WorkflowNode(id="c1", type="ds-list-append", config={"scope": "全局", "key": "x"})
     with pytest.raises(ValueError, match="作用域不合法"):
-        _ = await exec_ds_container(node_, ctx)
+        _ = await exec_ds_list_append(node_, ctx)
 
 
-def test_ds_container_fields_are_validated() -> None:
-    """动作 / 作用域枚举与变量名冒号在语义阶段拦住；合法图放行。"""
+def test_ds_list_fields_are_validated() -> None:
+    """作用域枚举与变量名冒号在语义阶段拦住；合法图放行。"""
 
     def graph_with(**config: object) -> dict[str, object]:
         return {
             "nodes": [
                 node("s", "trigger-message"),
-                node("c", "ds-container", **config),
+                node("c", "ds-list-append", **config),
                 node("e", "end"),
             ],
             "edges": [edge("s", "c"), edge("c", "e")],
         }
 
-    report = validate_graph(graph_with(action="list_遍历", key="x"))
+    report = validate_graph(graph_with(scope="全局", key="x"))
     assert not report.valid
-    assert [issue.code for issue in report.errors] == ["INVALID_DS_CONTAINER_ACTION"]
+    assert [issue.code for issue in report.errors] == ["INVALID_DS_LIST_SCOPE"]
 
-    report = validate_graph(graph_with(action="map_get", scope="全局", key="x"))
+    report = validate_graph(graph_with(key="a:b"))
     assert not report.valid
-    assert [issue.code for issue in report.errors] == ["INVALID_DS_CONTAINER_SCOPE"]
+    assert [issue.code for issue in report.errors] == ["INVALID_DS_LIST_KEY"]
 
-    report = validate_graph(graph_with(action="map_get", key="a:b"))
-    assert not report.valid
-    assert [issue.code for issue in report.errors] == ["INVALID_DS_CONTAINER_KEY"]
-
-    report = validate_graph(graph_with(action="list_append", scope="workflow", key="队列"))
+    report = validate_graph(graph_with(scope="workflow", key="队列"))
     assert report.valid and report.errors == []
