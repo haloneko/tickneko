@@ -219,6 +219,18 @@ class Cache:
         """删若干个字段，返回真删掉的个数；字段被删空的键就没了。"""
         return await self._require().hash_delete(key, *fields)
 
+    async def hash_exists(self, key: str, field: str) -> bool:
+        """字段在不在（键或字段不存在返回 ``False``）。"""
+        return await self._require().hash_exists(key, field)
+
+    async def hash_length(self, key: str) -> int:
+        """哈希的字段数（键不存在算 0）。"""
+        return await self._require().hash_length(key)
+
+    async def hash_keys(self, key: str) -> list[str]:
+        """列字段名（键不存在返回空列表）。"""
+        return await self._require().hash_keys(key)
+
     # ---- JSON（序列化在门面做，后端里存的还是一段字符串）----
     async def set_json(self, key: str, value: object, ttl: float | None = None) -> None:
         """把任意可 JSON 序列化的值写进去；``ttl`` 规则同 :meth:`set`。

@@ -189,6 +189,18 @@ class MemoryCache:
             del self._data[key]
         return removed
 
+    async def hash_exists(self, key: str, field: str) -> bool:
+        fields = self._hash(key)
+        return fields is not None and field in fields
+
+    async def hash_length(self, key: str) -> int:
+        fields = self._hash(key)
+        return 0 if fields is None else len(fields)
+
+    async def hash_keys(self, key: str) -> list[str]:
+        fields = self._hash(key)
+        return [] if fields is None else list(fields.keys())
+
     # ---- 通用：删除 / 过期 / 批量 / 列键 ----
     async def delete(self, key: str) -> bool:
         return self._data.pop(key, None) is not None

@@ -46,6 +46,10 @@ await cache.get("k")
 
 await cache.list_push("queue", "a", "b")            # 列表
 await cache.hash_set("user:1", {"name": "阿一"})    # 哈希
+await cache.hash_get("user:1", "name")              # 单字段读
+await cache.hash_exists("user:1", "name")           # 字段在不在（HEXISTS）
+await cache.hash_length("user:1")                   # 字段数（HLEN，服务端 O(1)）
+await cache.hash_keys("user:1")                     # 字段名列表（HKEYS，只搬名字不搬值）
 await cache.set_json("profile", {"tags": ["a"]})    # 嵌套结构走 JSON
 
 cache.configure(CacheOptions(backend="redis", namespace="tickneko"))   # 要用 Redis

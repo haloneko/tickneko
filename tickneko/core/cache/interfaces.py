@@ -117,6 +117,18 @@ class CacheBackend(Protocol):
         """删若干个字段（``hash_delete(key, "a", "b")``），返回真删掉的个数；被删空的键就没了。"""
         ...
 
+    async def hash_exists(self, key: str, field: str) -> bool:
+        """字段在不在（键或字段不存在返回 ``False``；键存在但不是哈希抛 CacheError）。"""
+        ...
+
+    async def hash_length(self, key: str) -> int:
+        """哈希的字段数（键不存在算 0）。"""
+        ...
+
+    async def hash_keys(self, key: str) -> list[str]:
+        """列字段名（键不存在返回空列表）；服务端 O(1) 或按需，别为了数个数把整个哈希拉回来。"""
+        ...
+
     async def keys(self, pattern: str = "*") -> list[str]:
         """按通配符列键（``*`` / ``?`` / ``[abc]``），默认全部；不保证顺序。"""
         ...

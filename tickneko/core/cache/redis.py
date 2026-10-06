@@ -228,6 +228,16 @@ class RedisCache:
             return 0
         return int(await self._call("hdel", self._full(key), *fields))
 
+    async def hash_exists(self, key: str, field: str) -> bool:
+        return bool(await self._call("hexists", self._full(key), field))
+
+    async def hash_length(self, key: str) -> int:
+        return int(await self._call("hlen", self._full(key)))
+
+    async def hash_keys(self, key: str) -> list[str]:
+        raw = await self._call("hkeys", self._full(key))
+        return [str(field) for field in raw]
+
     # ---- 内部 ----
     @staticmethod
     def _ex(ttl: float | None) -> timedelta | None:
