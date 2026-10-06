@@ -3,8 +3,9 @@
 有顺序（``list_get`` 按下标、``map_keys`` 按插入序），能检测存在（``contains``）；
 遍历以后单独加，顺序遍历用「下标取 + operator 自增」。
 
-和 ``ds-dict`` 一样走作用域化缓存（``scope`` + ``key`` 定位），``ctx.cache.set_json`` /
-``get_json`` 存取任意 JSON；list 元素 / map 值按**文本**存（与 cache 节点同一口径）。
+和键值对系列节点（``ds-dict-*``）一样走作用域化缓存（``scope`` + ``key`` 定位），
+``ctx.cache.set_json`` / ``get_json`` 存取任意 JSON；list 元素 / map 值按**文本**存
+（与 cache 节点同一口径）。
 
 config:
     action:   ``list_append`` / ``list_get`` / ``list_contains`` / ``list_remove`` /

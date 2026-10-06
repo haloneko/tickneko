@@ -18,7 +18,7 @@
       send.py            内置节点：send（把 message 发到 target 指向的会话：去向走 target 值端口 + 内容端口，走 ctx.gateway.reply；没有 target 就不发，回执不成功不打断流程）
       operator.py        内置节点：operator（算术：+ - * / %，结果文本化；算不出来送空串）
       cache.py           内置节点：cache（变量存取：get / set；作用域账号 / 图，前缀区分）
-      ds_dict.py         内置节点：ds-dict（数据结构字典：缓存里的一份字典变量，new/set/get/contains/remove/keys/length）
+      ds_dict.py         内置节点：键值对系列（ds-dict-set 设值 / -get 取值 / -contains 查存在 / -remove 删除 / -keys 取键列表 / -length 条目数，一个节点一个动作，写动作隐式创建；变量名与键名都能接线或手填，每个节点从 obj_out 送出本次操作的变量名，接给下一个键值对节点就是同一个对象接着改）
       ds_container.py    内置节点：ds-container（复合数据结构：缓存里的一份 list/map 容器变量，顺序取用 + 存在检测）
       placeholder.py     内置节点：placeholder（占位：只透传不做事，参与画布理线）
 
@@ -74,7 +74,14 @@ from .base import (
     input_value,
 )
 from .cache import exec_cache
-from .ds_dict import exec_ds_dict
+from .ds_dict import (
+    exec_ds_dict_contains,
+    exec_ds_dict_get,
+    exec_ds_dict_keys,
+    exec_ds_dict_length,
+    exec_ds_dict_remove,
+    exec_ds_dict_set,
+)
 from .ds_container import exec_ds_container
 from .ai_service import exec_ai_service
 from .port_types import PORT_TYPES, PortType, PortTypeDef
@@ -173,6 +180,11 @@ __all__ = [
     "exec_placeholder",
     "exec_operator",
     "exec_cache",
-    "exec_ds_dict",
+    "exec_ds_dict_set",
+    "exec_ds_dict_get",
+    "exec_ds_dict_contains",
+    "exec_ds_dict_remove",
+    "exec_ds_dict_keys",
+    "exec_ds_dict_length",
     "exec_ds_container",
 ]

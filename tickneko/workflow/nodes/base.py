@@ -89,6 +89,7 @@ CATEGORY_LABELS: dict[str, str] = {
     "action": "动作",
     "control": "控制",
     "data": "数据",
+    "ds_dict": "键值对",
     "onebot": "OneBot 平台",
     "kook": "Kook 平台",
     "end": "结束",
