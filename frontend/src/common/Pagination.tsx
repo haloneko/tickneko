@@ -6,7 +6,7 @@
  * 中间用省略号 —— 长列表也不会撑出一条几千个按钮的工具栏。
  *
  * 越界页码（数据变少导致当前页超出范围）**不在这里纠正**：组件只按 totalPages 渲染，
- * 交给持有页码的一方收口（见 LogsPage 里的 clamp），免得一个展示组件偷偷改别人的状态。
+ * 交给持有页码的一方收口（`common/usePagedQuery` 里做），免得一个展示组件偷偷改别人的状态。
  */
 import { useEffect, useState } from 'react'
 import {
