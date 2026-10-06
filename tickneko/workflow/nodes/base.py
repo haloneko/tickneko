@@ -89,6 +89,8 @@ CATEGORY_LABELS: dict[str, str] = {
     "action": "动作",
     "control": "控制",
     "data": "数据",
+    "ds_dict": "键值对",
+    "ds_list": "列表",
     "onebot": "OneBot 平台",
     "kook": "Kook 平台",
     "end": "结束",
@@ -260,6 +262,26 @@ def input_value(
     if name in ctx.inputs:
         return ctx.inputs[name]
     return node.config.get(name, default)
+
+
+def cache_key(node: WorkflowNode, ctx: NodeExecutionContext, scope: str, key: str) -> str:
+    """拼缓存键：**用前缀区分作用域**（账号级带归属 id、图级带图 id）。
+
+    这是 cache 节点与 ds-*（数据结构）节点共用的键规则：``workflow`` 作用域落在
+    ``workflow:graph:{workflow_id}:{key}``、``account`` 落在 ``workflow:acct:{owner_id}:{key}``。
+    离线跑（没挂到具体图上）时图级前缀是 ``local``（:data:`NO_WORKFLOW_ID`）；账号级没有
+    归属就当场抛 —— 不知道是谁的缓存不能瞎写。
+
+    :raises ValueError: 账号级作用域但上下文不知道归属（``owner_id`` 为空）。
+    """
+    if scope == "account":
+        if not ctx.owner_id:
+            raise ValueError(
+                f"节点 {node.id} 的作用域是账号级，但不知道归属（owner_id 为空）"
+                "：离线跑请改用 workflow 作用域"
+            )
+        return f"workflow:acct:{ctx.owner_id}:{key}"
+    return f"workflow:graph:{ctx.workflow_id}:{key}"
 
 
 class NodeExecutionContext:

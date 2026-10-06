@@ -157,6 +157,10 @@ class Cache:
         """剩余存活秒数；``None`` = 键不存在，``math.inf`` = 永不过期。"""
         return await self._require().ttl(key)
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型（``"string"`` / ``"list"`` / ``"hash"``）；不存在返回 ``None``。"""
+        return await self._require().type(key)
+
     async def incr(self, key: str, amount: int = 1) -> int:
         """原子自增（键不存在时从 0 起算），返回自增后的值。"""
         return await self._require().incr(key, amount)
@@ -182,12 +186,12 @@ class Cache:
         return await self._require().clear()
 
     # ---- 列表（Redis 的 list）----
-    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
         """从右侧推入元素，返回推入后的长度；``ttl`` 只在键不存在时用。"""
-        return await self._require().list_push(key, *values, ttl=self._resolve_ttl(ttl))
+        return await self._require().list_push_right(key, *values, ttl=self._resolve_ttl(ttl))
 
     async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
-        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push`。"""
+        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push_right`。"""
         return await self._require().list_push_left(key, *values, ttl=self._resolve_ttl(ttl))
 
     async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
@@ -198,9 +202,13 @@ class Cache:
         """列表长度（键不存在算 0）。"""
         return await self._require().list_length(key)
 
-    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
         """从右侧弹出至多 ``count`` 个元素，按弹出顺序返回；弹空之后键就没了。"""
-        return await self._require().list_pop(key, count)
+        return await self._require().list_pop_right(key, count)
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        """从左侧弹出至多 ``count`` 个元素，按弹出顺序返回；弹空之后键就没了。"""
+        return await self._require().list_pop_left(key, count)
 
     # ---- 哈希（Redis 的 hash）----
     async def hash_set(self, key: str, items: Mapping[str, str], ttl: float | None = None) -> int:
@@ -218,6 +226,18 @@ class Cache:
     async def hash_delete(self, key: str, *fields: str) -> int:
         """删若干个字段，返回真删掉的个数；字段被删空的键就没了。"""
         return await self._require().hash_delete(key, *fields)
+
+    async def hash_exists(self, key: str, field: str) -> bool:
+        """字段在不在（键或字段不存在返回 ``False``）。"""
+        return await self._require().hash_exists(key, field)
+
+    async def hash_length(self, key: str) -> int:
+        """哈希的字段数（键不存在算 0）。"""
+        return await self._require().hash_length(key)
+
+    async def hash_keys(self, key: str) -> list[str]:
+        """列字段名（键不存在返回空列表）。"""
+        return await self._require().hash_keys(key)
 
     # ---- JSON（序列化在门面做，后端里存的还是一段字符串）----
     async def set_json(self, key: str, value: object, ttl: float | None = None) -> None:

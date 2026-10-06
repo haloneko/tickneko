@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 from typing import Annotated
 
@@ -108,6 +109,20 @@ async def _collect(
     return rows
 
 
+async def _read_value(cache: Cache, raw: str) -> str:
+    """按键的结构类型取「展示用」的值：字符串原样，哈希 / 列表序列化成 JSON 文本。
+
+    变量接口以前只认字符串键，对哈希发 ``GET`` 会撞 WRONGTYPE 把整页打成 500；现在
+    先 ``cache.type`` 探结构再分派 —— 三种结构都能看，键不存在 / 空值给空串。
+    """
+    kind = await cache.type(raw)
+    if kind == "hash":
+        return json.dumps(await cache.hash_get_all(raw), ensure_ascii=False)
+    if kind == "list":
+        return json.dumps(await cache.list_range(raw), ensure_ascii=False)
+    return (await cache.get(raw)) or ""
+
+
 @router.get(
     "",
     response_model=ApiResponse[VariablePage],
@@ -167,14 +182,14 @@ async def list_variables(
         cache, store, scope=scope, keyword=(query or "").strip(), owner=chosen_owner
     )
     page = rows[offset : offset + limit]
-
+    #(TODO)现在是强耦合，以后改成由注册节点处理变量
     items: list[VariableData] = []
     for raw, row in page:
-        value = await cache.get(raw)
+        value = await _read_value(cache, raw)
         ttl = await cache.ttl(raw)
         # 缓存层的「永不过期」是 math.inf；JSON 里没有 Infinity，归一成 None（前端按「不过期」显示）
         remaining = None if ttl is None or ttl == math.inf else ttl
-        items.append(row.model_copy(update={"value": value or "", "ttl": remaining}))
+        items.append(row.model_copy(update={"value": value, "ttl": remaining}))
 
     return ApiResponse[VariablePage](
         data=VariablePage(items=items, total=len(rows)), trace_id=trace_id

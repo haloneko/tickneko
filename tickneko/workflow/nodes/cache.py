@@ -50,7 +50,14 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import ValidationIssue, WorkflowNode
-from .base import TRIGGER_PORT, ConfigField, NodeExecutionContext, PortSpec, input_value
+from .base import (
+    TRIGGER_PORT,
+    ConfigField,
+    NodeExecutionContext,
+    PortSpec,
+    cache_key,
+    input_value,
+)
 from .registry import register_node
 
 #: 允许的动作，**顺序即画布下拉顺序**
@@ -104,22 +111,6 @@ def validate_cache_node(node: WorkflowNode) -> list[ValidationIssue]:
     return issues
 
 
-def _cache_key(node: WorkflowNode, ctx: NodeExecutionContext, scope: str, key: str) -> str:
-    """拼缓存键：**用前缀区分作用域**（账号级带归属 id、图级带图 id）。
-
-    离线跑（没挂到具体图上）时图级前缀是 ``local``（``NO_WORKFLOW_ID``）；账号级没有
-    归属就当场抛 —— 不知道是谁的缓存不能瞎写。
-    """
-    if scope == "account":
-        if not ctx.owner_id:
-            raise ValueError(
-                f"节点 {node.id} 的作用域是账号级，但不知道归属（owner_id 为空）"
-                "：离线跑请改用 workflow 作用域"
-            )
-        return f"workflow:acct:{ctx.owner_id}:{key}"
-    return f"workflow:graph:{ctx.workflow_id}:{key}"
-
-
 def _clip(raw: str) -> str:
     """日志里展示键 / 值：太长截断（避免长值刷屏）。"""
     return raw if len(raw) <= CLIP_CHARS else raw[:CLIP_CHARS] + "…"
@@ -171,28 +162,28 @@ async def exec_cache(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str,
             "手填或上游送来的都不行）"
         )
 
-    cache_key = _cache_key(node, ctx, scope, key)
+    full_key = cache_key(node, ctx, scope, key)
 
     if action == "set":
         raw = input_value(node, ctx, "value", default="")
         text = "" if raw is None else str(raw)
-        await ctx.cache.set(cache_key, text)
-        ctx.logger.info(f"[cache:{node.id}] set {cache_key} = {_clip(text)}")
-        ctx.log.append(f"[cache] {node.id}: set {cache_key} = {_clip(text)}")
+        await ctx.cache.set(full_key, text)
+        ctx.logger.info(f"[cache:{node.id}] set {full_key} = {_clip(text)}")
+        ctx.log.append(f"[cache] {node.id}: set {full_key} = {_clip(text)}")
         return {"cache_value": text}
 
-    value = await ctx.cache.get(cache_key)
+    value = await ctx.cache.get(full_key)
     if value is None:
         # 没存过不算事故：有默认值就用默认值（手填兜底 / 也能接线），没有才送空串
         raw_default = input_value(node, ctx, "default", default="")
         fallback = "" if raw_default is None else str(raw_default)
         if fallback:
-            ctx.logger.info(f"[cache:{node.id}] {cache_key} 还没存过 -> 用默认值 {_clip(fallback)}")
-            ctx.log.append(f"[cache] {node.id}: get {cache_key} -> (还没存过，用默认值) {_clip(fallback)}")
+            ctx.logger.info(f"[cache:{node.id}] {full_key} 还没存过 -> 用默认值 {_clip(fallback)}")
+            ctx.log.append(f"[cache] {node.id}: get {full_key} -> (还没存过，用默认值) {_clip(fallback)}")
             return {"cache_value": fallback}
-        ctx.logger.info(f"[cache:{node.id}] {cache_key} 还没存过")
-        ctx.log.append(f"[cache] {node.id}: get {cache_key} -> (还没存过)")
+        ctx.logger.info(f"[cache:{node.id}] {full_key} 还没存过")
+        ctx.log.append(f"[cache] {node.id}: get {full_key} -> (还没存过)")
         return {"cache_value": ""}
-    ctx.logger.info(f"[cache:{node.id}] get {cache_key} -> {len(value)} 字符")
-    ctx.log.append(f"[cache] {node.id}: get {cache_key} -> {_clip(value)}")
+    ctx.logger.info(f"[cache:{node.id}] get {full_key} -> {len(value)} 字符")
+    ctx.log.append(f"[cache] {node.id}: get {full_key} -> {_clip(value)}")
     return {"cache_value": value}

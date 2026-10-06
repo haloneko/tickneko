@@ -8,7 +8,7 @@
 每次要等二十几秒。最后一段「真连 Redis」可选，先探一下端口，没人听就直接跳过。
 
 缓存层对外只有一个门面 :class:`~tickneko.core.cache.core.Cache`：业务代码只写 ``get`` /
-``set`` / ``list_push`` / ``hash_set`` 这一套，背后是 Redis 还是进程内存由 ``backend``
+``set`` / ``list_push_right`` / ``hash_set`` 这一套，背后是 Redis 还是进程内存由 ``backend``
 决定 —— 两边语义对齐（键是 ``str``，值是字符串 / 列表 / 哈希三种结构之一、TTL 按秒），
 换后端不用改业务代码。``tickneko.core.cache`` 里的 ``cache`` 就是 ``Cache()`` 的进程级单例
 （和 ``app.py`` 里用的是同一个）。
@@ -24,7 +24,7 @@
    不带 ttl 时的兜底；
 3. **批量与自增**：``set_many`` / ``get_many`` / ``delete_many`` 成批走；``incr`` 是原子的，
    值不是整数字符串时和 Redis 一样报错；
-4. **结构化数据**：列表（``list_push`` / ``list_range`` / ``list_pop``）与哈希
+4. **结构化数据**：列表（``list_push_right`` / ``list_pop_left`` / ``list_range``）与哈希
    （``hash_set`` / ``hash_get_all`` / ``hash_delete``）；嵌套结构（哈希的哈希）用
    ``set_json`` / ``get_json`` 存 —— 一个键只能按写入时的那种结构访问，换一种会报错；
 5. **列键与清空**：``keys()`` 支持通配符（列出来的是有效期内、不带前缀的逻辑键），
@@ -183,14 +183,14 @@ async def main() -> None:
 
         # ------------------------------------------------ 4. 列表 / 哈希 / JSON
         print("\n=== 4. 结构化数据：列表、哈希，嵌套结构走 JSON ===")
-        await cache.list_push("queue", "任务一", "任务二", ttl=30)
-        pushed = await cache.list_push("queue", "任务三")
+        await cache.list_push_right("queue", "任务一", "任务二", ttl=30)
+        pushed = await cache.list_push_right("queue", "任务三")
         items = await cache.list_range("queue")
-        print(f"  list_push 后再推一个返回 {pushed}，整条列表 = {items}")
+        print(f"  list_push_right 后再推一个返回 {pushed}，整条列表 = {items}")
         tail = await cache.list_range("queue", -2, -1)
         print(f"  list_range('queue', -2, -1) = {tail}（负数从右数，两端都含）")
-        popped = await cache.list_pop("queue", 2)
-        print(f"  list_pop('queue', 2) = {popped}（按弹出顺序：最右侧的先出来）")
+        popped = await cache.list_pop_right("queue", 2)
+        print(f"  list_pop_right('queue', 2) = {popped}（按弹出顺序：最右侧的先出来）")
         remaining = await cache.ttl("queue")
         left = await cache.list_length("queue")
         print(f"  剩 {left} 个；TTL 还是 {remaining:.1f} 秒 —— 往已有的键上追加不刷新过期时间")

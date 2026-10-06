@@ -107,6 +107,11 @@ class RedisCache:
             return None if seconds == -2 else float("inf")
         return seconds
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型（``"string"`` / ``"list"`` / ``"hash"``）；不存在返回 ``None``。"""
+        raw = await self._call("type", self._full(key))
+        return None if raw == "none" else str(raw)
+
     async def incr(self, key: str, amount: int = 1) -> int:
         return int(await self._call("incrby", self._full(key), amount))
 
@@ -153,7 +158,7 @@ class RedisCache:
         return await self.delete_many(found) if found else 0
 
     # ---- 列表 ----
-    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
         return await self._push(key, values, left=False, ttl=ttl)
 
     async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
@@ -166,11 +171,18 @@ class RedisCache:
     async def list_length(self, key: str) -> int:
         return int(await self._call("llen", self._full(key)))
 
-    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
         if count <= 0:
             return []
         # 带 count 的 RPOP 要 Redis 6.2+；更早的服务端会由驱动报错，翻成 CacheError 抛出去
         popped = await self._call("rpop", self._full(key), count)
+        return [] if popped is None else [str(item) for item in popped]
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        if count <= 0:
+            return []
+        # 带 count 的 LPOP 要 Redis 6.2+；更早的服务端会由驱动报错，翻成 CacheError 抛出去
+        popped = await self._call("lpop", self._full(key), count)
         return [] if popped is None else [str(item) for item in popped]
 
     async def _push(self, key: str, values: Sequence[str], *, left: bool, ttl: float | None) -> int:
@@ -227,6 +239,16 @@ class RedisCache:
         if not fields:
             return 0
         return int(await self._call("hdel", self._full(key), *fields))
+
+    async def hash_exists(self, key: str, field: str) -> bool:
+        return bool(await self._call("hexists", self._full(key), field))
+
+    async def hash_length(self, key: str) -> int:
+        return int(await self._call("hlen", self._full(key)))
+
+    async def hash_keys(self, key: str) -> list[str]:
+        raw = await self._call("hkeys", self._full(key))
+        return [str(field) for field in raw]
 
     # ---- 内部 ----
     @staticmethod

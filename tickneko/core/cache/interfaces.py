@@ -51,6 +51,14 @@ class CacheBackend(Protocol):
         """剩余存活秒数；``None`` = 键不存在，``math.inf`` = 永不过期。"""
         ...
 
+    async def type(self, key: str) -> str | None:
+        """键的结构类型：``"string"`` / ``"list"`` / ``"hash"``；键不存在返回 ``None``。
+
+        给「枚举键后想按结构读取」的调用方用（如变量查看：hash 走 hash_get_all，
+        别对哈希发 ``GET`` 撞 WRONGTYPE）。不抛异常，不存在就是不存在。
+        """
+        ...
+
     async def incr(self, key: str, amount: int = 1) -> int:
         """原子自增（键不存在时从 0 起算），返回自增后的值；值不是整数则抛 CacheError。"""
         ...
@@ -68,15 +76,15 @@ class CacheBackend(Protocol):
         ...
 
     # ---- 列表（Redis 的 list）----
-    async def list_push(self, key: str, *values: str, ttl: float | None = None) -> int:
-        """从右侧推入元素（``list_push(key, "a", "b")``），返回推入后的长度。
+    async def list_push_right(self, key: str, *values: str, ttl: float | None = None) -> int:
+        """从右侧推入元素（``list_push_right(key, "a", "b")``），返回推入后的长度。
 
         ``ttl`` 只在键不存在时用；空推入当「问长度」，不建键。
         """
         ...
 
     async def list_push_left(self, key: str, *values: str, ttl: float | None = None) -> int:
-        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push`。"""
+        """从左侧推入元素（队列的另一端），其余同 :meth:`list_push_right`。"""
         ...
 
     async def list_range(self, key: str, start: int = 0, stop: int = -1) -> list[str]:
@@ -90,8 +98,15 @@ class CacheBackend(Protocol):
         """列表长度（键不存在算 0）。"""
         ...
 
-    async def list_pop(self, key: str, count: int = 1) -> list[str]:
+    async def list_pop_right(self, key: str, count: int = 1) -> list[str]:
         """从右侧弹出至多 ``count`` 个元素，按**弹出顺序**返回（最右侧的先出来）。
+
+        没得弹就返回空列表；弹空之后键就没了。
+        """
+        ...
+
+    async def list_pop_left(self, key: str, count: int = 1) -> list[str]:
+        """从左侧弹出至多 ``count`` 个元素，按**弹出顺序**返回（最左侧的先出来）。
 
         没得弹就返回空列表；弹空之后键就没了。
         """
@@ -115,6 +130,18 @@ class CacheBackend(Protocol):
 
     async def hash_delete(self, key: str, *fields: str) -> int:
         """删若干个字段（``hash_delete(key, "a", "b")``），返回真删掉的个数；被删空的键就没了。"""
+        ...
+
+    async def hash_exists(self, key: str, field: str) -> bool:
+        """字段在不在（键或字段不存在返回 ``False``；键存在但不是哈希抛 CacheError）。"""
+        ...
+
+    async def hash_length(self, key: str) -> int:
+        """哈希的字段数（键不存在算 0）。"""
+        ...
+
+    async def hash_keys(self, key: str) -> list[str]:
+        """列字段名（键不存在返回空列表）；服务端 O(1) 或按需，别为了数个数把整个哈希拉回来。"""
         ...
 
     async def keys(self, pattern: str = "*") -> list[str]:
