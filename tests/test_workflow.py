@@ -3384,12 +3384,11 @@ async def test_api_node_types_catalog_matches_registry() -> None:
         "target",
         "list",
         "dict",
-        "set",
         "generic",
     ]
     assert port_types["trigger"]["data"] is False  # 控制流：只表达先后
     assert port_types["trigger"]["label"] == "触发（控制流）"
-    for port_type in ("message", "target", "list", "dict", "set", "generic"):
+    for port_type in ("message", "target", "list", "dict", "generic"):
         assert port_types[port_type]["data"] is True  # 数据流：沿边送值
         assert port_types[port_type]["color"]  # 每种类型都带配色
 
