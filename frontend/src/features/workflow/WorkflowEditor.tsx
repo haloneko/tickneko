@@ -37,7 +37,7 @@ import {
 } from './workflowApi'
 import { useToast } from '../../common/Toast'
 import { copyText, readText } from '../../lib/clipboard'
-import { Canvas, type BoxRect } from './editor/Canvas'
+import { Canvas } from './editor/Canvas'
 import { centeredNodePosition } from './editor/canvasGeometry'
 import { ContextMenuHost } from './editor/ContextMenuHost'
 import {
@@ -82,6 +82,7 @@ import { useLatest } from './editor/useLatest'
 import { useNodeDrag } from './editor/useNodeDrag'
 import { useNodeOps } from './editor/useNodeOps'
 import { usePaletteDrag } from './editor/usePaletteDrag'
+import { useBoxSelect } from './editor/useBoxSelect'
 import { useWorkflowDoc } from './editor/useWorkflowDoc'
 import styles from './WorkflowEditor.module.css'
 
@@ -120,7 +121,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [showPalette, setShowPalette] = useState(true)
   const [showInspector, setShowInspector] = useState(true)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [boxSel, setBoxSel] = useState<BoxRect | null>(null)
   /** 右键菜单（节点上 / 空白处）：同一时刻只有一份，状态与关闭都在 hook 里，见 useContextMenu */
   const { state: menuState, ref: menuRef, open: openMenuAt, close: closeMenu } = useContextMenu()
   /**
@@ -146,11 +146,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const canvasRef = useRef<HTMLDivElement>(null)
   /** 最近一次画布鼠标位置（画布坐标）：Ctrl+V 进入放置模式时拿它当虚影落点 */
   const lastPointerRef = useRef<Point | null>(null)
-  /** 框选起点（画布坐标） */
-  const boxRef = useRef<Point | null>(null)
-  /** 本次空白拖拽是否已越过阈值进入框选（松手时区分「点了一下」与「框选完」） */
-  const boxMovedRef = useRef(false)
-  /** 框选结束的松手会被浏览器补发一发 click，用它立牌子吞掉（见画布 onClick） */
+  /** 框选结束 / 落子虚影的松手会被浏览器补发一发 click，用它立牌子吞掉（见画布 onClick） */
   const suppressClickRef = useRef(false)
   /**
    * 画布内部剪贴板：Ctrl+C / Ctrl+X 存这里的节点 + 组内连线，Ctrl+V 以虚影放置。
@@ -274,6 +270,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     pushUndo,
     setSelectedId,
     setSelectedIds,
+  })
+
+  /** 框选：矩形与「框住了谁」都在 useBoxSelect 里，这里只把图与坐标递进去。 */
+  const box = useBoxSelect({
+    graph,
+    positions,
+    setSelectedIds,
+    bringToFront: ops.bringToFront,
   })
 
   // ---- 载入 ----
@@ -410,7 +414,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     // 左键点空白：准备框选（需要拖动超过阈值才真正开始）
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
-    boxRef.current = toCanvas(e.clientX, e.clientY, rect)
+    box.start(toCanvas(e.clientX, e.clientY, rect))
   }
 
   const onCanvasMouseMove = (e: React.MouseEvent) => {
@@ -424,33 +428,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       setPlacing({ ...placing, x: point.x, y: point.y })
       return
     }
-    if (boxRef.current) {
-      const start = boxRef.current
-      const dx = point.x - start.x
-      const dy = point.y - start.y
-      // 拖动超过阈值才显示框选
-      if (!boxSel && Math.abs(dx) < 5 && Math.abs(dy) < 5) return
-      boxMovedRef.current = true
-      if (!boxSel) {
-        setBoxSel({ x0: start.x, y0: start.y, x1: point.x, y1: point.y })
-      } else {
-        setBoxSel({ ...boxSel, x1: point.x, y1: point.y })
-      }
-      // 实时计算选中
-      const x0 = Math.min(start.x, point.x)
-      const y0 = Math.min(start.y, point.y)
-      const x1 = Math.max(start.x, point.x)
-      const y1 = Math.max(start.y, point.y)
-      const ids = new Set<string>()
-      for (const n of graph.nodes) {
-        const p = positions[n.id]
-        if (!p) continue
-        const h = nodeHeight(nodeDef(n.type, n.config))
-        if (p.x + NODE_W >= x0 && p.x <= x1 && p.y + h >= y0 && p.y <= y1) ids.add(n.id)
-      }
-      setSelectedIds(ids)
-      return
-    }
+    if (box.move(point)) return // 框选手势：这一发移动归它管
     if (drag.active()) drag.move(point)
     if (connectRef.current) setConnectCursor(point)
   }
@@ -460,17 +438,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     drag.finish()
     // 真正拖出过框选：松手后浏览器会补发一发 click，先立牌子让 onClick 跳过清空，
     // 否则刚框选中的节点会被它故意清掉（普通点击不立牌子——那发 click 正是取消选中要用的）
-    if (boxRef.current && boxMovedRef.current) {
-      suppressClickRef.current = true
-      // 框选收尾：整组固化到图层末尾（相对顺序保持原样）
-      ops.bringToFront(selectedIds)
-    }
+    if (box.finish()) suppressClickRef.current = true
     connectRef.current = null
     endPan()
-    boxRef.current = null
-    boxMovedRef.current = false
     setConnectCursor(null)
-    setBoxSel(null)
   }
 
   const onCanvasWheel = (e: React.WheelEvent) => {
@@ -922,7 +893,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           panning={panning}
           placeholder={placeholder}
           empty={graph.nodes.length === 0}
-          boxSel={boxSel}
+          boxSel={box.rect}
           onMouseDown={onCanvasMouseDown}
           onMouseMove={onCanvasMouseMove}
           onMouseUp={onCanvasMouseUp}
