@@ -30,23 +30,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchNodeCatalog,
   type NodeTypeSpec,
-  type WorkflowEdge,
   type WorkflowGraph,
-  type WorkflowNode,
 } from './workflowApi'
 import { useToast } from '../../common/Toast'
-import { copyText, readText } from '../../lib/clipboard'
 import { Canvas } from './editor/Canvas'
 import { centeredNodePosition } from './editor/canvasGeometry'
 import { ContextMenuHost } from './editor/ContextMenuHost'
-import {
-  buildClipboardPayload,
-  formatCopiedAt,
-  parseClipboard,
-  pickFresherClipboard,
-  serializeClipboard,
-  type ClipboardPayload,
-} from './editor/clipboard'
 import { EdgeLayer } from './editor/EdgeLayer'
 import { GhostNode } from './editor/GhostNode'
 import { Inspector } from './editor/Inspector'
@@ -64,7 +53,6 @@ import {
   nodeHeight,
   normalizeGraph,
   portEffKey,
-  uid,
   wiredPortsByNode,
   type Point,
   type Positions,
@@ -79,27 +67,12 @@ import { useNodeOps } from './editor/useNodeOps'
 import { usePaletteDrag } from './editor/usePaletteDrag'
 import { useBoxSelect } from './editor/useBoxSelect'
 import { usePortConnect } from './editor/usePortConnect'
+import { useEditorClipboard } from './editor/useEditorClipboard'
 import { useWorkflowDoc } from './editor/useWorkflowDoc'
 import styles from './WorkflowEditor.module.css'
 
 /** 没有接线信息时的空集合：身份固定，别让 memo 化的卡片每次拿到一个新 Set */
 const NO_WIRED: Set<string> = new Set()
-
-/**
- * 「待放置的一组节点」：两种贴法共用这份几何 —— Ctrl+V 先拿它当虚影（跟鼠标走），
- * 右键「粘贴」直接拿它落子。
- *
- * ``x``/``y`` = 组中心当前对准的画布坐标；``cx``/``cy`` = 组中心在这组快照坐标里的位置，
- * 两者之差就是整组要平移的偏移。
- */
-interface Placing {
-  nodes: WorkflowNode[]
-  edges: WorkflowEdge[]
-  cx: number
-  cy: number
-  x: number
-  y: number
-}
 
 interface WorkflowEditorProps {
   workflowId: string
@@ -120,18 +93,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   /** 右键菜单（节点上 / 空白处）：同一时刻只有一份，状态与关闭都在 hook 里，见 useContextMenu */
   const { state: menuState, ref: menuRef, open: openMenuAt, close: closeMenu } = useContextMenu()
   /**
-   * 粘贴虚影（Ctrl+V 放置模式）：剪贴板内容先以半透明预览跟鼠标走，左键落子才真正放图。
-   * 右键菜单的「粘贴」不走这一步 —— 鼠标已经指名了落点，一步到位（见 ``pasteAt``）。
-   */
-  const [placing, setPlacing] = useState<Placing | null>(null)
-  /**
-   * 剪贴板里有没有能贴的东西 —— 右键菜单据此决定**显不显示「粘贴」**。
-   *
-   * 它只是界面用的镜像（真值在 ``clipboardRef`` 与系统剪贴板里）：复制 / 剪切写内存时置真；
-   * 打开编辑器时探一次系统剪贴板，把上次会话 / 别的标签页复制过的那份也算上。
-   */
-  const [hasClipboard, setHasClipboard] = useState(false)
-  /**
    * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
    * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
    */
@@ -144,14 +105,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const lastPointerRef = useRef<Point | null>(null)
   /** 框选结束 / 落子虚影的松手会被浏览器补发一发 click，用它立牌子吞掉（见画布 onClick） */
   const suppressClickRef = useRef(false)
-  /**
-   * 画布内部剪贴板：Ctrl+C / Ctrl+X 存这里的节点 + 组内连线，Ctrl+V 以虚影放置。
-   *
-   * 这是**第一重**保险（内存里那份，读写都是同步的）；同一份内容还会写进系统剪贴板
-   * （见 copySelection），刷新页面后靠它把内容捞回来。
-   */
-  const clipboardRef = useRef<ClipboardPayload | null>(null)
-
   // ---- hooks ----
   const { pan, zoom, setPan, toCanvas, zoomAt, reset: resetView } = useCanvasView()
   const { pushUndo, undo: popUndo, reset: resetHistory } = useGraphHistory(graph)
@@ -228,7 +181,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const graphRef = useLatest(graph)
   const positionsRef = useLatest(positions)
   const selectedIdsRef = useLatest(selectedIds)
-  const placingRef = useLatest(placing)
 
   /**
    * 「点击添加」的落点：当前可视区中央对应的节点左上角（见 ``useNodeOps.centerOf``）。
@@ -284,21 +236,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     void loadCatalog()
   }, [loadCatalog])
 
-  /**
-   * 打开编辑器时探一次**系统**剪贴板：上一会话 / 别的标签页里复制的那份也能贴。
-   * 读不到（没权限、非安全上下文、Firefox 要手势）就当没有 —— 菜单里先不显示「粘贴」，
-   * 复制 / 剪切或成功 Ctrl+V 一次之后自然会显出来。
-   */
-  useEffect(() => {
-    let alive = true
-    void readText().then((text) => {
-      if (alive && parseClipboard(text)) setHasClipboard(true)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
   // ---- 节点面板 ----
   /** 屏幕坐标 -> 画布坐标；指针不在画布可视区内返回 null（拖拽落点判定用） */
   const toCanvasAt = useCallback(
@@ -311,6 +248,33 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   /** 节点库拖出 / 点击添加：虚影跟随与落子都在 usePaletteDrag 里。 */
   const paletteDrag = usePaletteDrag({ add: ops.add, toCanvasAt })
+
+  // ---- 选择集合 ----
+  /** 当前选择集合：优先框选集合，其次单击选中的那个（删除 / 复制粘贴同一口径）。 */
+  const getSelectionIds = useCallback((): Set<string> => {
+    if (selectedIds.size > 0) return selectedIds
+    return selectedId ? new Set([selectedId]) : new Set<string>()
+  }, [selectedIds, selectedId])
+
+  // ---- 剪贴板 ----
+  /** 复制 / 剪切 / 粘贴与那套「虚影放置」，都在 useEditorClipboard 里。 */
+  const clip = useEditorClipboard({
+    graph,
+    positions,
+    pushUndo,
+    setGraph,
+    setSelectedId,
+    setSelectedIds,
+    pushToast,
+    getSelectionIds,
+    removeMany: ops.removeMany,
+    lastPointer: () => lastPointerRef.current,
+    suppressNextClick: () => {
+      suppressClickRef.current = true
+    },
+  })
+  /** 回调里要读最新的「有没有在放置」，又不想让回调换身份（见 useLatest） */
+  const placingRef = useLatest(clip.placing)
 
   // ---- 画布事件 ----
   /** 点空白 / 右键空白：同一件事（清空选中） */
@@ -393,10 +357,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       return
     }
     if (e.button !== 0) return
-    if (placing) {
+    if (clip.placing) {
       // 放置模式：这一下左键就是「落子」，不进框选
       e.preventDefault()
-      dropPlacing()
+      clip.dropPlacing()
       return
     }
     // 左键点空白：准备框选（需要拖动超过阈值才真正开始）
@@ -411,9 +375,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (movePan(e)) return // 正在右键平移：这一发移动归它管
     const point = toCanvas(e.clientX, e.clientY, rect)
     lastPointerRef.current = point
-    if (placing) {
+    if (clip.placing) {
       // 放置模式：虚影组中心跟着鼠标走
-      setPlacing({ ...placing, x: point.x, y: point.y })
+      clip.movePlacing(point)
       return
     }
     if (box.move(point)) return // 框选手势：这一发移动归它管
@@ -464,186 +428,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   })
 
 
-  // ---- 剪贴板 / 快捷键 ----
-  /** 当前选择集合：优先框选集合，其次单击选中的那个（删除 / 复制粘贴同一口径）。 */
-  const getSelectionIds = useCallback((): Set<string> => {
-    if (selectedIds.size > 0) return selectedIds
-    return selectedId ? new Set([selectedId]) : new Set<string>()
-  }, [selectedIds, selectedId])
+  // ---- 撤销 / 快捷键 ----
 
-  /**
-   * 复制这些节点 + 组内连线；返回复制到的节点数。集合由调用方给：快捷键给的是「当前选择」，
-   * 右键菜单给的是「这一次右键的那一组」。
-   *
-   * **双重保险**：内存里的 clipboardRef（同步可用）+ 系统剪贴板（活过刷新 / 能跨标签页）。
-   * 负载里带上**复制时刻**（copiedAt），从系统剪贴板捞回来时能答出这是什么时候拷的。
-   * 写系统剪贴板是异步的，也不一定成功（非安全上下文 / 没权限），失败不影响第一重。
-   */
-  const copyNodes = useCallback(
-    (ids: Iterable<string>): number => {
-      const set = new Set(ids)
-      if (set.size === 0) return 0
-      const payload = buildClipboardPayload(
-        graph.nodes.filter((n) => set.has(n.id)).map((n) => structuredClone(n)),
-        graph.edges
-          .filter((e) => set.has(e.source) && set.has(e.target))
-          .map((e) => structuredClone(e)),
-      )
-      clipboardRef.current = payload
-      setHasClipboard(true)
-      void copyText(serializeClipboard(payload)).catch(() => {
-        pushToast('error', '写入系统剪贴板失败（画布内剪贴板仍可用）')
-      })
-      return payload.nodes.length
-    },
-    [graph, pushToast],
-  )
 
-  /** Ctrl+C / Ctrl+X 走这条：复制的是「当前选择」 */
-  const copySelection = useCallback(
-    (): number => copyNodes(getSelectionIds()),
-    [copyNodes, getSelectionIds],
-  )
-
-  /**
-   * 剪切 = 复制 + 删除（Ctrl+X / 右键菜单共用）；返回复制到的节点数（0 = 没得剪，调用方别再删）。
-   *
-   * 先复制后删：复制失败（空选择）就不动图，别把节点删没了却什么都没进剪贴板。
-   */
-  const cutNodes = useCallback(
-    (ids: Iterable<string>): number => {
-      const list = [...ids]
-      const copied = copyNodes(list)
-      if (copied === 0) return 0
-      ops.removeMany(list)
-      return copied
-    },
-    [copyNodes, ops.removeMany],
-  )
-
-  /**
-   * 取当前剪贴板内容：内存与系统剪贴板**都读**，谁新听谁的。
-   *
-   * * 两份都读到了：用户多半刚在别的标签页 / 别的窗口复制过，比 ``copiedAt``，新的那份赢；
-   * * 只读到一份：就用这一份（内存空了说明刷新过页面，只剩系统剪贴板那一份）；
-   * * 两份都没读到：返回 ``null``，粘贴什么都不发生。
-   *
-   * 挑中的那一份顺手存回内存，后面几次 Ctrl+V 不必再读系统剪贴板。
-   */
-  const takeClipboard = useCallback(async (): Promise<ClipboardPayload | null> => {
-    const local =
-      clipboardRef.current && clipboardRef.current.nodes.length > 0 ? clipboardRef.current : null
-    const system = parseClipboard(await readText())
-    const payload = pickFresherClipboard(local, system)
-    if (!payload) return null
-    clipboardRef.current = payload
-    setHasClipboard(true)
-    if (payload !== local) {
-      // 用的是系统剪贴板那一份：说清它是哪儿来的、什么时候拷的
-      const when = formatCopiedAt(payload.copiedAt)
-      if (when) {
-        pushToast('success', `已从系统剪贴板取回 ${payload.nodes.length} 个节点（复制于 ${when}）`)
-      }
-    }
-    return payload
-  }, [pushToast])
-
-  /**
-   * 剪贴板内容 -> 待放置的一组：节点坐标先落到快照上（旧节点用 localStorage 迁来的兜底坐标），
-   * 组包围盒中心当作「鼠标抓着的那一点」。``at`` 省略时就用组中心（原位粘贴）。
-   */
-  const placingFrom = useCallback(
-    (clip: ClipboardPayload, at?: Point): Placing => {
-      const base = (n: WorkflowNode): Point => positions[n.id] ?? { x: n.x ?? 0, y: n.y ?? 0 }
-      const nodes = clip.nodes.map((n) => {
-        const b = base(n)
-        return { ...n, x: b.x, y: b.y }
-      })
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
-      for (const n of nodes) {
-        const nx = n.x ?? 0
-        const ny = n.y ?? 0
-        minX = Math.min(minX, nx)
-        minY = Math.min(minY, ny)
-        maxX = Math.max(maxX, nx + NODE_W)
-        maxY = Math.max(maxY, ny + nodeHeight(nodeDef(n.type, n.config)))
-      }
-      const cx = (minX + maxX) / 2
-      const cy = (minY + maxY) / 2
-      const target = at ?? { x: cx, y: cy }
-      return { nodes, edges: clip.edges, cx, cy, x: target.x, y: target.y }
-    },
-    [positions],
-  )
-
-  /** 落子：把待放置的一组真正写进图（副本换新 id、组内连线重建，新节点成为选中集合）。 */
-  const insertPlacing = useCallback(
-    (next: Placing) => {
-      pushUndo()
-      const offX = next.x - next.cx
-      const offY = next.y - next.cy
-      const idMap = new Map<string, string>()
-      const newNodes = next.nodes.map((n) => {
-        const id = uid(n.type)
-        idMap.set(n.id, id)
-        return {
-          ...n,
-          id,
-          config: structuredClone(n.config),
-          x: (n.x ?? 0) + offX,
-          y: (n.y ?? 0) + offY,
-        }
-      })
-      const newEdges = next.edges.map((e) => ({
-        ...e,
-        source: idMap.get(e.source) ?? e.source,
-        target: idMap.get(e.target) ?? e.target,
-      }))
-      setGraph((g) => ({ nodes: [...g.nodes, ...newNodes], edges: [...g.edges, ...newEdges] }))
-      setSelectedIds(new Set(newNodes.map((n) => n.id)))
-      setSelectedId(null)
-    },
-    [pushUndo],
-  )
-
-  /**
-   * Ctrl+V：把剪贴板内容挂成虚影进入「放置模式」——虚影组中心跟着鼠标走，
-   * 左键落子（dropPlacing）/ Esc 取消。起点取最近一次画布鼠标位置。
-   */
-  const startPlacing = useCallback(async () => {
-    const clip = await takeClipboard()
-    if (!clip || clip.nodes.length === 0) return
-    setPlacing(placingFrom(clip, lastPointerRef.current ?? undefined))
-  }, [placingFrom, takeClipboard])
-
-  /**
-   * 右键「粘贴」：在右键那一处**直接落子**，不做虚影 —— 鼠标已经指名落点了，再让人点一次左键
-   * 没有意义（虚影那套是给键盘 Ctrl+V 用的，它没有落点信息）。顺带收掉可能在挂着的虚影。
-   */
-  const pasteAt = useCallback(
-    async (at: Point) => {
-      const clip = await takeClipboard()
-      if (!clip || clip.nodes.length === 0) {
-        pushToast('info', '剪贴板里没有可粘贴的节点')
-        return
-      }
-      insertPlacing(placingFrom(clip, at))
-      setPlacing(null)
-    },
-    [insertPlacing, placingFrom, pushToast, takeClipboard],
-  )
-
-  /** 虚影落子：写进图 + 收起虚影（这一步会带出补发 click，见下） */
-  const dropPlacing = useCallback(() => {
-    if (!placing) return
-    insertPlacing(placing)
-    setPlacing(null)
-    // 落子这一下会带出一发补发 click：立牌子别让它当「点空白」清掉刚选中的新节点
-    suppressClickRef.current = true
-  }, [insertPlacing, placing])
 
   /** Ctrl+Z：弹回上一份快照；选中态收敛到快照里仍存在的节点。 */
   const undo = useCallback(() => {
@@ -666,8 +453,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       const key = e.key.toLowerCase()
 
       // Esc：正在放置的粘贴虚影取消（不落子）
-      if (e.key === 'Escape' && placing) {
-        setPlacing(null)
+      if (e.key === 'Escape' && clip.placing) {
+        clip.cancelPlacing()
         return
       }
 
@@ -684,14 +471,14 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       if (mod && key === 'z' && !e.shiftKey) {
         e.preventDefault()
         // 先收掉挂着的虚影，再撤销上一步
-        setPlacing(null)
+        clip.cancelPlacing()
         undo()
         return
       }
 
       if (mod && (key === 'c' || key === 'x')) {
         // Ctrl+C 复制当前选择；Ctrl+X 走同一条「复制 + 删除」
-        const copied = key === 'x' ? cutNodes(getSelectionIds()) : copySelection()
+        const copied = key === 'x' ? clip.cut(getSelectionIds()) : clip.copySelection()
         if (copied === 0) return // 没选中什么就不劫持
         e.preventDefault()
         return
@@ -702,8 +489,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         // 内存有货时能同步拦下默认行为；只剩系统剪贴板那一份时要等 promise，
         // 赶不上这一发 preventDefault —— 画布上本来就没有可输入目标（输入框上面
         // 已经放行走了），不拦也不碍事。
-        if (clipboardRef.current && clipboardRef.current.nodes.length > 0) e.preventDefault()
-        void startPlacing()
+        if (clip.hasLocal()) e.preventDefault()
+        clip.startPlacing()
         return
       }
 
@@ -720,17 +507,19 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     drafting,
     draft,
     undo,
-    copySelection,
-    cutNodes,
+    clip.copySelection,
+    clip.cut,
     getSelectionIds,
-    startPlacing,
+    clip.startPlacing,
     ops.removeMany,
-    placing,
+    clip.placing,
   ])
 
   // ---- 渲染辅助 ----
   /** 节点库拖出的虚影（null = 没在拖 / 不在画布上） */
   const paletteGhost = paletteDrag.ghost
+  /** 粘贴虚影那一组（null = 没在放置模式） */
+  const ghostPlacing = clip.placing
   const selectedNode = selectedId ? nodeById.get(selectedId) ?? null : null
   const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
   const selectedWired = (selectedId ? wiredByNode.get(selectedId) : undefined) ?? NO_WIRED
@@ -841,10 +630,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           })}
 
           {/* 粘贴虚影：组内连线 + 节点预览（渲染在真实节点之后，左键落子 / Esc 取消） */}
-          {placing && (() => {
-            const offX = placing.x - placing.cx
-            const offY = placing.y - placing.cy
-            const ghostById = new Map(placing.nodes.map((n) => [n.id, n]))
+          {ghostPlacing && (() => {
+            const offX = ghostPlacing.x - ghostPlacing.cx
+            const offY = ghostPlacing.y - ghostPlacing.cy
+            const ghostById = new Map(ghostPlacing.nodes.map((n) => [n.id, n]))
             /** 虚影节点位置（快照坐标 + 当前偏移）：连线按它算端口坐标 */
             const ghostPosOf = (id: string): Point | undefined => {
               const n = ghostById.get(id)
@@ -852,8 +641,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             }
             return (
               <>
-                <EdgeLayer edges={placing.edges} nodeById={ghostById} posOf={ghostPosOf} faint />
-                {placing.nodes.map((n) => (
+                <EdgeLayer edges={ghostPlacing.edges} nodeById={ghostById} posOf={ghostPosOf} faint />
+                {ghostPlacing.nodes.map((n) => (
                   <GhostNode
                     // 加前缀：复制场景下虚影 id 与图里原节点相同，直接当 key 会撞车
                     key={`ghost-${n.id}`}
@@ -902,13 +691,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         state={menuState}
         menuRef={menuRef}
         catalog={palette}
-        canPaste={hasClipboard}
+        canPaste={clip.hasClipboard}
         actions={{
-          cut: cutNodes,
-          copy: copyNodes,
-          paste: (at) => {
-            void pasteAt(at)
-          },
+          cut: clip.cut,
+          copy: clip.copy,
+          paste: clip.pasteAt,
           remove: ops.removeMany,
           add: ops.add,
         }}
