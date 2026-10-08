@@ -9,9 +9,17 @@
  *
  * * ``editor/catalog.ts``          目录与几何：``nodeDef`` / 尺寸 / 连线端点 / 各类纯函数
  * * ``editor/clipboard.ts``        复制粘贴的负载（节点 + 连线 + 复制时刻）与解析
+ * * ``editor/useNodeCatalog.tsx``  节点类型目录（后端给的）+ 加载 / 失败占位
  * * ``editor/useGraphHistory.ts``  撤销栈（Ctrl+Z）
  * * ``editor/useCanvasView.ts``    pan / zoom 与坐标换算
+ * * ``editor/useCanvasPan.ts``     右键拖动平移（顺带记「点了一下还是拖了一下」）
+ * * ``editor/useNodeOps.ts``       改图那一半：加 / 删 / 改配置 / 挪位置 / 图层顺序
  * * ``editor/useNodeDrag.ts``      拖节点（整组一起挪）
+ * * ``editor/useBoxSelect.ts``     框选：矩形、实时选中、松手固化图层
+ * * ``editor/usePortConnect.ts``   端口拉线与落线（含跟着鼠标走的那条临时线）
+ * * ``editor/usePaletteDrag.ts``   从节点库拖出：虚影跟随与落子
+ * * ``editor/useEditorClipboard.ts`` 复制 / 剪切 / 粘贴，以及粘贴时的虚影放置
+ * * ``editor/useEditorShortcuts.ts`` 画布快捷键（Delete / Ctrl+Z / Ctrl+S / C / X / V）
  * * ``editor/Canvas.tsx``          画布本体（两层变换 + 内容插槽）
  * * ``editor/EdgeLayer.tsx``       连线层（真图与粘贴虚影共用）
  * * ``editor/NodeCard.tsx``        节点卡片（memo 化：拖动时只重渲染被拖的那几个）
@@ -23,15 +31,10 @@
  * * ``editor/ContextMenuList.tsx`` 右键菜单渲染器（不认识具体按钮，只看配置）
  * * ``editor/ContextMenuHost.tsx`` 右键菜单的唯一出口：采集状态 + 选配置表
  * * ``editor/useContextMenu.ts``   菜单状态 + 点别处 / Esc 关闭
- * * ``editor/useCanvasPan.ts``     右键拖动平移（顺带记「点了一下还是拖了一下」）
  * * ``editor/useWorkflowDoc.ts``    暂存 / 校验 / 提交版本 / 发布 / 运行开关（后端那一半）
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  fetchNodeCatalog,
-  type NodeTypeSpec,
-  type WorkflowGraph,
-} from './workflowApi'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import type { WorkflowGraph } from './workflowApi'
 import { useToast } from '../../common/Toast'
 import { Canvas } from './editor/Canvas'
 import { centeredNodePosition } from './editor/canvasGeometry'
@@ -46,8 +49,6 @@ import {
   NODE_W,
   effectivePortTypes,
   emptyGraph,
-  installCatalog,
-  isEditingTarget,
   issuesByNode,
   nodeDef,
   nodeHeight,
@@ -68,6 +69,8 @@ import { usePaletteDrag } from './editor/usePaletteDrag'
 import { useBoxSelect } from './editor/useBoxSelect'
 import { usePortConnect } from './editor/usePortConnect'
 import { useEditorClipboard } from './editor/useEditorClipboard'
+import { useNodeCatalog } from './editor/useNodeCatalog'
+import { useEditorShortcuts } from './editor/useEditorShortcuts'
 import { useWorkflowDoc } from './editor/useWorkflowDoc'
 import styles from './WorkflowEditor.module.css'
 
@@ -92,12 +95,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   /** 右键菜单（节点上 / 空白处）：同一时刻只有一份，状态与关闭都在 hook 里，见 useContextMenu */
   const { state: menuState, ref: menuRef, open: openMenuAt, close: closeMenu } = useContextMenu()
-  /**
-   * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
-   * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
-   */
-  const [palette, setPalette] = useState<NodeTypeSpec[] | null>(null)
-  const [catalogFailed, setCatalogFailed] = useState(false)
+
 
   // ---- refs（交互过程中的临时状态，改它不触发渲染）----
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -221,20 +219,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   })
 
   // ---- 载入 ----
-  /** 拉节点目录：面板 / 端口 / 配置字段都按它渲染（只读后端内存里那张注册表，不碰库）。 */
-  const loadCatalog = useCallback(async () => {
-    setCatalogFailed(false)
-    try {
-      const { data } = await fetchNodeCatalog()
-      setPalette(installCatalog(data))
-    } catch {
-      setCatalogFailed(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    void loadCatalog()
-  }, [loadCatalog])
+  /** 节点类型目录：拉目录 + 加载占位都在 useNodeCatalog 里（它要等图也加载完）。 */
+  const nodeCatalog = useNodeCatalog(loading)
 
   // ---- 节点面板 ----
   /** 屏幕坐标 -> 画布坐标；指针不在画布可视区内返回 null（拖拽落点判定用） */
@@ -310,11 +296,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       }
 
       // 空白处：与左键点空白同义（清空选中）
-      if (!palette) return // 目录还没拉回来：没有可加的节点，这份菜单画出来也是空的
+      if (!nodeCatalog.palette) return // 目录还没拉回来：没有可加的节点，这份菜单画出来也是空的
       clearSelection()
       openMenuAt({ kind: 'canvas', x: e.clientX, y: e.clientY, point })
     },
-    [panDragged, palette, openMenuAt, clearSelection, toCanvas],
+    [panDragged, nodeCatalog.palette, openMenuAt, clearSelection, toCanvas],
   )
 
   /** 节点卡片那份签名（``nodeId`` 必填）；空白处那份见下 */
@@ -445,75 +431,20 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     setSelectedId((cur) => (cur && !ids.has(cur) ? null : cur))
   }, [popUndo])
 
-  // 画布快捷键：Delete 删除 / Ctrl+Z 撤销 / Ctrl+S 暂存 / Ctrl+C 复制 / Ctrl+X 剪切 / Ctrl+V 粘贴
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.repeat) return
-      const mod = e.ctrlKey || e.metaKey
-      const key = e.key.toLowerCase()
-
-      // Esc：正在放置的粘贴虚影取消（不落子）
-      if (e.key === 'Escape' && clip.placing) {
-        clip.cancelPlacing()
-        return
-      }
-
-      // Ctrl+S 暂存：输入框里也照常生效（先拦掉浏览器默认的「保存网页」）
-      if (mod && key === 's') {
-        e.preventDefault()
-        if (!drafting) void draft()
-        return
-      }
-
-      // 输入框 / 下拉里：退格与文本复制粘贴归它们，不抢
-      if (isEditingTarget(e.target)) return
-
-      if (mod && key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        // 先收掉挂着的虚影，再撤销上一步
-        clip.cancelPlacing()
-        undo()
-        return
-      }
-
-      if (mod && (key === 'c' || key === 'x')) {
-        // Ctrl+C 复制当前选择；Ctrl+X 走同一条「复制 + 删除」
-        const copied = key === 'x' ? clip.cut(getSelectionIds()) : clip.copySelection()
-        if (copied === 0) return // 没选中什么就不劫持
-        e.preventDefault()
-        return
-      }
-
-      if (mod && key === 'v') {
-        // 两处剪贴板都读（内存 + 系统），谁新用谁；两份都没货就什么都不发生。
-        // 内存有货时能同步拦下默认行为；只剩系统剪贴板那一份时要等 promise，
-        // 赶不上这一发 preventDefault —— 画布上本来就没有可输入目标（输入框上面
-        // 已经放行走了），不拦也不碍事。
-        if (clip.hasLocal()) e.preventDefault()
-        clip.startPlacing()
-        return
-      }
-
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        const ids = getSelectionIds()
-        if (ids.size === 0) return
-        e.preventDefault()
-        ops.removeMany([...ids])
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [
-    drafting,
+  // 画布快捷键：Delete / Ctrl+Z / Ctrl+S / Ctrl+C / Ctrl+X / Ctrl+V，都在 useEditorShortcuts 里
+  useEditorShortcuts({
+    isPlacing: () => clip.placing !== null,
+    cancelPlacing: clip.cancelPlacing,
     draft,
+    drafting,
     undo,
-    clip.copySelection,
-    clip.cut,
+    copySelection: clip.copySelection,
+    cut: clip.cut,
     getSelectionIds,
-    clip.startPlacing,
-    ops.removeMany,
-    clip.placing,
-  ])
+    startPlacing: clip.startPlacing,
+    hasLocalClipboard: clip.hasLocal,
+    removeMany: ops.removeMany,
+  })
 
   // ---- 渲染辅助 ----
   /** 节点库拖出的虚影（null = 没在拖 / 不在画布上） */
@@ -523,31 +454,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const selectedNode = selectedId ? nodeById.get(selectedId) ?? null : null
   const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
   const selectedWired = (selectedId ? wiredByNode.get(selectedId) : undefined) ?? NO_WIRED
-
-  /** 加载中 / 目录拉不回来：画布位置显示它 */
-  const placeholder =
-    palette === null || loading ? (
-      <div className={styles.loading}>
-        {palette !== null ? (
-          <>
-            <span className="spinner" />
-            正在加载…
-          </>
-        ) : catalogFailed ? (
-          <>
-            节点类型加载失败
-            <button className="btn" onClick={() => void loadCatalog()}>
-              重试
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="spinner" />
-            正在加载节点类型…
-          </>
-        )}
-      </div>
-    ) : null
 
   // 连线层按 id 取坐标：直接闭包读当前 positions（用 ref 会慢一帧，拖动时线会跟不上节点）
   const posOf = useCallback((id: string) => positions[id], [positions])
@@ -575,9 +481,9 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       />
 
       <div className={styles.body}>
-        {palette !== null && showPalette && (
+        {nodeCatalog.palette !== null && showPalette && (
           <Palette
-            items={palette}
+            items={nodeCatalog.palette}
             onItemMouseDown={paletteDrag.onItemMouseDown}
             onItemClick={paletteDrag.onItemClick}
           />
@@ -588,7 +494,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           pan={pan}
           zoom={zoom}
           panning={panning}
-          placeholder={placeholder}
+          placeholder={nodeCatalog.placeholder}
           empty={graph.nodes.length === 0}
           boxSel={box.rect}
           onMouseDown={onCanvasMouseDown}
@@ -669,7 +575,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           })()}
         </Canvas>
 
-        {palette !== null && showInspector && (
+        {nodeCatalog.palette !== null && showInspector && (
           <Inspector
             node={selectedNode}
             def={selectedDef}
@@ -690,7 +596,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       <ContextMenuHost
         state={menuState}
         menuRef={menuRef}
-        catalog={palette}
+        catalog={nodeCatalog.palette}
         canPaste={clip.hasClipboard}
         actions={{
           cut: clip.cut,
