@@ -81,6 +81,7 @@ import { useGraphHistory } from './editor/useGraphHistory'
 import { useLatest } from './editor/useLatest'
 import { useNodeDrag } from './editor/useNodeDrag'
 import { useNodeOps } from './editor/useNodeOps'
+import { usePaletteDrag } from './editor/usePaletteDrag'
 import { useWorkflowDoc } from './editor/useWorkflowDoc'
 import styles from './WorkflowEditor.module.css'
 
@@ -134,8 +135,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
    * 打开编辑器时探一次系统剪贴板，把上次会话 / 别的标签页复制过的那份也算上。
    */
   const [hasClipboard, setHasClipboard] = useState(false)
-  /** 节点库拖出的新节点虚影：x/y = 鼠标的画布坐标（null = 没拖 / 不在画布上） */
-  const [newDrag, setNewDrag] = useState<{ type: string; x: number; y: number } | null>(null)
   /**
    * 节点类型目录（后端给的）：拉回来之前**不渲染画布** —— 认不出类型就画不出端口。
    * 失败也不退回一份前端定义（那正是以前漂移的来源），只给一个重试。
@@ -309,63 +308,17 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }, [])
 
   // ---- 节点面板 ----
-  /**
-   * 节点库选项按下：拖进画布 → 虚影跟随、松手落子；没拖（纯点击）→ 和以前一样直接添加。
-   * 监听挂在 window 上：拖拽路径大半在画布外（左侧栏），画布上的 mousemove 收不到。
-   */
-  const onPaletteMouseDown = (e: React.MouseEvent, type: string) => {
-    if (e.button !== 0) return
-    e.preventDefault() // 防文本选中 / 原生拖拽
-    const dragStart = { startX: e.clientX, startY: e.clientY, armed: false }
-    /** 鼠标在画布可视区里就返回画布矩形（用于坐标换算），否则 null */
-    const insideCanvas = (ev: MouseEvent) => {
+  /** 屏幕坐标 -> 画布坐标；指针不在画布可视区内返回 null（拖拽落点判定用） */
+  const toCanvasAt = useCallback(
+    (clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect()
-      if (!rect) return null
-      if (
-        ev.clientX < rect.left ||
-        ev.clientX > rect.right ||
-        ev.clientY < rect.top ||
-        ev.clientY > rect.bottom
-      ) {
-        return null
-      }
-      return rect
-    }
-    const onMove = (ev: MouseEvent) => {
-      if (!dragStart.armed) {
-        // 位移超过阈值才算「拖拽」，没超过就还是「点击」
-        if (Math.abs(ev.clientX - dragStart.startX) + Math.abs(ev.clientY - dragStart.startY) < 5) {
-          return
-        }
-        dragStart.armed = true
-      }
-      const rect = insideCanvas(ev)
-      if (!rect) {
-        setNewDrag(null) // 不在画布上：虚影收起
-        return
-      }
-      setNewDrag({ type, ...toCanvas(ev.clientX, ev.clientY, rect) })
-    }
-    const onUp = (ev: MouseEvent) => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      if (!dragStart.armed) {
-        ops.add(type) // 纯点击：出现在当前可视区中央
-        return
-      }
-      setNewDrag(null)
-      const rect = insideCanvas(ev)
-      if (!rect) return // 松手在画布外：取消，不添加
-      ops.add(type, toCanvas(ev.clientX, ev.clientY, rect))
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
+      return rect ? toCanvas(clientX, clientY, rect) : null
+    },
+    [toCanvas],
+  )
 
-  /** 键盘（Enter/Space）触发的 click：detail 为 0；鼠标的交给 mousedown/mouseup 流程 */
-  const onPaletteItemClick = (e: React.MouseEvent, type: string) => {
-    if (e.detail === 0) ops.add(type)
-  }
+  /** 节点库拖出 / 点击添加：虚影跟随与落子都在 usePaletteDrag 里。 */
+  const paletteDrag = usePaletteDrag({ add: ops.add, toCanvasAt })
 
   // ---- 画布事件 ----
   /** 点空白 / 右键空白：同一件事（清空选中） */
@@ -880,6 +833,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   ])
 
   // ---- 渲染辅助 ----
+  /** 节点库拖出的虚影（null = 没在拖 / 不在画布上） */
+  const paletteGhost = paletteDrag.ghost
   const selectedNode = selectedId ? nodeById.get(selectedId) ?? null : null
   const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
   const selectedWired = (selectedId ? wiredByNode.get(selectedId) : undefined) ?? NO_WIRED
@@ -953,7 +908,11 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
       <div className={styles.body}>
         {palette !== null && showPalette && (
-          <Palette items={palette} onItemMouseDown={onPaletteMouseDown} onItemClick={onPaletteItemClick} />
+          <Palette
+            items={palette}
+            onItemMouseDown={paletteDrag.onItemMouseDown}
+            onItemClick={paletteDrag.onItemClick}
+          />
         )}
 
         <Canvas
@@ -1030,13 +989,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           })()}
 
           {/* 节点库拖出的新节点虚影（中心跟着鼠标；松手在画布上才真正添加） */}
-          {newDrag && (() => {
-            const def = nodeDef(newDrag.type)
+          {paletteGhost && (() => {
+            const def = nodeDef(paletteGhost.type)
             return (
               <GhostNode
-                type={newDrag.type}
-                left={newDrag.x - NODE_W / 2}
-                top={newDrag.y - nodeHeight(def) / 2}
+                type={paletteGhost.type}
+                left={paletteGhost.x - NODE_W / 2}
+                top={paletteGhost.y - nodeHeight(def) / 2}
               />
             )
           })()}
