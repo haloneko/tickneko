@@ -30,7 +30,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchNodeCatalog,
   type NodeTypeSpec,
-  type PortType,
   type WorkflowEdge,
   type WorkflowGraph,
   type WorkflowNode,
@@ -56,7 +55,6 @@ import { Palette } from './editor/Palette'
 import { Toolbar } from './editor/Toolbar'
 import {
   NODE_W,
-  edgeCurve,
   effectivePortTypes,
   emptyGraph,
   installCatalog,
@@ -65,9 +63,6 @@ import {
   nodeDef,
   nodeHeight,
   normalizeGraph,
-  portAbsPos,
-  portColor,
-  portCompatible,
   portEffKey,
   uid,
   wiredPortsByNode,
@@ -83,6 +78,7 @@ import { useNodeDrag } from './editor/useNodeDrag'
 import { useNodeOps } from './editor/useNodeOps'
 import { usePaletteDrag } from './editor/usePaletteDrag'
 import { useBoxSelect } from './editor/useBoxSelect'
+import { usePortConnect } from './editor/usePortConnect'
 import { useWorkflowDoc } from './editor/useWorkflowDoc'
 import styles from './WorkflowEditor.module.css'
 
@@ -155,14 +151,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
    * （见 copySelection），刷新页面后靠它把内容捞回来。
    */
   const clipboardRef = useRef<ClipboardPayload | null>(null)
-  /** 正在拖出的连线：起点端口信息 + 鼠标位置 */
-  const connectRef = useRef<{
-    nodeId: string
-    portId: string
-    portType: PortType
-    direction: 'in' | 'out'
-  } | null>(null)
-  const [connectCursor, setConnectCursor] = useState<Point | null>(null)
 
   // ---- hooks ----
   const { pan, zoom, setPan, toCanvas, zoomAt, reset: resetView } = useCanvasView()
@@ -430,7 +418,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     }
     if (box.move(point)) return // 框选手势：这一发移动归它管
     if (drag.active()) drag.move(point)
-    if (connectRef.current) setConnectCursor(point)
+    connect.move(point)
   }
 
   const onCanvasMouseUp = () => {
@@ -439,9 +427,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     // 真正拖出过框选：松手后浏览器会补发一发 click，先立牌子让 onClick 跳过清空，
     // 否则刚框选中的节点会被它故意清掉（普通点击不立牌子——那发 click 正是取消选中要用的）
     if (box.finish()) suppressClickRef.current = true
-    connectRef.current = null
+    connect.cancel() // 松手在空白处：拉到一半的线收掉
     endPan()
-    setConnectCursor(null)
   }
 
   const onCanvasWheel = (e: React.WheelEvent) => {
@@ -463,80 +450,18 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   }
 
   // ---- 端口连线 ----
-  const onPortMouseDown = useCallback(
-    (
-      e: React.MouseEvent,
-      nodeId: string,
-      portId: string,
-      portType: PortType,
-      direction: 'in' | 'out',
-    ) => {
-      if (e.button !== 0) return
-      if (placingRef.current) return // 放置模式：端口也让路，左键归画布落子
-      e.stopPropagation()
-      connectRef.current = { nodeId, portId, portType, direction }
-      const rect = canvasRef.current?.getBoundingClientRect()
-      if (rect) setConnectCursor(toCanvas(e.clientX, e.clientY, rect))
-    },
-    [toCanvas],
-  )
-
-  const onPortMouseUp = useCallback(
-    (
-      e: React.MouseEvent,
-      nodeId: string,
-      portId: string,
-      portType: PortType,
-      direction: 'in' | 'out',
-    ) => {
-      const pending = connectRef.current
-      if (!pending) return
-      e.stopPropagation()
-      const clear = () => {
-        connectRef.current = null
-        setConnectCursor(null)
-      }
-      // 不能连自己
-      if (pending.nodeId === nodeId) return clear()
-      // 方向必须一进一出
-      if (pending.direction === direction) return clear()
-      // 类型必须兼容（同类；泛型端口可接任意数据流端口）
-      if (!portCompatible(pending.portType, portType)) {
-        pushToast('error', `端口类型不匹配：${pending.portType} ≠ ${portType}`)
-        return clear()
-      }
-      // 确定 source / target
-      let source: string
-      let target: string
-      let sourcePort: string
-      let targetPort: string
-      if (pending.direction === 'out') {
-        source = pending.nodeId
-        target = nodeId
-        sourcePort = pending.portId
-        targetPort = portId
-      } else {
-        source = nodeId
-        target = pending.nodeId
-        sourcePort = portId
-        targetPort = pending.portId
-      }
-      // 去重：重复连线不占撤销步
-      const exists = graphRef.current.edges.some(
-        (ed) =>
-          ed.source === source &&
-          ed.target === target &&
-          ed.sourcePort === sourcePort &&
-          ed.targetPort === targetPort,
-      )
-      if (!exists) {
-        pushUndo()
-        setGraph((g) => ({ ...g, edges: [...g.edges, { source, target, sourcePort, targetPort }] }))
-      }
-      clear()
-    },
-    [pushToast, pushUndo],
-  )
+  /** 拉线 / 落线 / 那条跟着鼠标走的临时线，都在 usePortConnect 里。 */
+  const connect = usePortConnect({
+    graph,
+    setGraph,
+    pushUndo,
+    pushToast,
+    toCanvasAt,
+    blocked: () => placingRef.current !== null, // 放置模式：端口让路，左键归画布落子
+    nodeById,
+    positions,
+    effTypes,
+  })
 
 
   // ---- 剪贴板 / 快捷键 ----
@@ -810,23 +735,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const selectedDef = selectedNode ? nodeDef(selectedNode.type, selectedNode.config) : null
   const selectedWired = (selectedId ? wiredByNode.get(selectedId) : undefined) ?? NO_WIRED
 
-  /** 正在拉的临时连线（起点端口 -> 鼠标） */
-  const pendingEdge = useMemo(() => {
-    const conn = connectRef.current
-    if (!conn || !connectCursor) return null
-    const node = nodeById.get(conn.nodeId)
-    if (!node) return null
-    const start = portAbsPos(conn.nodeId, conn.portId, conn.direction, node.type, positions, node.config)
-    if (!start) return null
-    return {
-      path: edgeCurve(start.x, start.y, connectCursor.x, connectCursor.y),
-      // 泛型端口拖线也按生效类型显色（placeholder 输出接会话定位就是橙色预览线）
-      color: portColor(
-        effTypes.get(portEffKey(conn.nodeId, conn.direction, conn.portId)) ?? conn.portType,
-      ),
-    }
-  }, [connectCursor, nodeById, positions, effTypes])
-
   /** 加载中 / 目录拉不回来：画布位置显示它 */
   const placeholder =
     palette === null || loading ? (
@@ -906,7 +814,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             nodeById={nodeById}
             posOf={posOf}
             onDelete={ops.removeEdge}
-            pending={pendingEdge}
+            pending={connect.pending}
             effTypes={effTypes}
           />
 
@@ -926,8 +834,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
                 onMouseDown={onNodeMouseDown}
                 onClick={onNodeClick}
                 onContextMenu={onNodeContextMenu}
-                onPortMouseDown={onPortMouseDown}
-                onPortMouseUp={onPortMouseUp}
+                onPortMouseDown={connect.start}
+                onPortMouseUp={connect.drop}
               />
             )
           })}
