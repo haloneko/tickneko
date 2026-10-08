@@ -80,6 +80,7 @@ import { useCanvasView } from './editor/useCanvasView'
 import { useGraphHistory } from './editor/useGraphHistory'
 import { useLatest } from './editor/useLatest'
 import { useNodeDrag } from './editor/useNodeDrag'
+import { useNodeOps } from './editor/useNodeOps'
 import { useWorkflowDoc } from './editor/useWorkflowDoc'
 import styles from './WorkflowEditor.module.css'
 
@@ -246,38 +247,31 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
   const selectedIdsRef = useLatest(selectedIds)
   const placingRef = useLatest(placing)
 
-  /** 拖节点（一次可挪一批，组拖动用）：直接改节点 x/y（随暂存 / 提交一起持久化）。 */
-  const moveNodes = useCallback((next: Positions) => {
-    setGraph((g) => ({
-      ...g,
-      nodes: g.nodes.map((n) => {
-        const p = next[n.id]
-        return p ? { ...n, x: p.x, y: p.y } : n
-      }),
-    }))
-  }, [])
-
   /**
-   * 提到图层最上：把节点挪到数组末尾（渲染序 = DOM 序 = 图层序）。
-   * 不是临时样式——松手 / 取消选中后顺序依然保持，并随暂存一起保存。
+   * 「点击添加」的落点：当前可视区中央对应的节点左上角（见 ``useNodeOps.centerOf``）。
+   * 要读画布 DOM 矩形与当前 pan / zoom —— 那是视图层的事，留在编排层算好递进去。
    */
-  const bringToFront = useCallback((ids: Iterable<string>) => {
-    const set = new Set(ids)
-    if (set.size === 0) return
-    setGraph((g) => {
-      const front = g.nodes.filter((n) => set.has(n.id))
-      if (front.length === 0) return g
-      const rest = g.nodes.filter((n) => !set.has(n.id))
-      const next = [...rest, ...front]
-      // 本来就在末尾（相对顺序没变）就不动，省一次重渲染
-      if (next.every((n, i) => n === g.nodes[i])) return g
-      return { ...g, nodes: next }
-    })
-  }, [])
+  const centerOf = useCallback(
+    (size: { width: number; height: number }) => {
+      const viewport = canvasRef.current?.getBoundingClientRect()
+      if (!viewport) return null
+      return centeredNodePosition(viewport, size, pan, zoom)
+    },
+    [pan, zoom],
+  )
+
+  /** 改图的那一半（加 / 删 / 改配置 / 挪位置 / 图层顺序）都在 useNodeOps 里。 */
+  const ops = useNodeOps({
+    pushUndo,
+    setGraph,
+    setSelectedId,
+    setSelectedIds,
+    centerOf,
+  })
 
   const drag = useNodeDrag({
-    moveNodes,
-    bringToFront,
+    moveNodes: ops.moveNodes,
+    bringToFront: ops.bringToFront,
     pushUndo,
     setSelectedId,
     setSelectedIds,
@@ -313,95 +307,6 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       alive = false
     }
   }, [])
-
-  // ---- 节点操作 ----
-  const addNode = useCallback(
-    (type: string, pos?: Point) => {
-      const def = nodeDef(type)
-      const height = nodeHeight(def)
-      const viewport = canvasRef.current?.getBoundingClientRect()
-      if (!pos && !viewport) return
-      const position = pos
-        ? { x: pos.x - NODE_W / 2, y: pos.y - height / 2 }
-        : centeredNodePosition(viewport!, { width: NODE_W, height }, pan, zoom)
-      const id = uid(type)
-      pushUndo()
-      const node: WorkflowNode = {
-        id,
-        type: def.type,
-        config: { ...def.defaults },
-        // 拖拽落点保持原样；点击添加固定在当前屏幕视野中央。
-        ...position,
-      }
-      setGraph((g) => ({ ...g, nodes: [...g.nodes, node] }))
-      setSelectedId(id)
-    },
-    [pushUndo, pan, zoom],
-  )
-
-  const deleteNode = useCallback(
-    (id: string) => {
-      pushUndo()
-      setGraph((g) => ({
-        nodes: g.nodes.filter((n) => n.id !== id),
-        edges: g.edges.filter((e) => e.source !== id && e.target !== id),
-      }))
-      setSelectedId((cur) => (cur === id ? null : cur))
-    },
-    [pushUndo],
-  )
-
-  /** 按 id 批量删除节点（连带两端连线），并清理指向它们的选中态。Delete 键 / 右键菜单共用。 */
-  const deleteNodesByIds = useCallback(
-    (ids: string[]) => {
-      if (ids.length === 0) return
-      pushUndo()
-      const set = new Set(ids)
-      setGraph((g) => ({
-        nodes: g.nodes.filter((n) => !set.has(n.id)),
-        edges: g.edges.filter((e) => !set.has(e.source) && !set.has(e.target)),
-      }))
-      setSelectedIds((cur) => {
-        const next = new Set([...cur].filter((id) => !set.has(id)))
-        return next.size === cur.size ? cur : next
-      })
-      setSelectedId((cur) => (cur && set.has(cur) ? null : cur))
-    },
-    [pushUndo],
-  )
-
-  const deleteEdge = useCallback(
-    (edge: WorkflowEdge) => {
-      pushUndo()
-      setGraph((g) => ({
-        ...g,
-        edges: g.edges.filter(
-          (e) =>
-            !(
-              e.source === edge.source &&
-              e.target === edge.target &&
-              e.sourcePort === edge.sourcePort &&
-              e.targetPort === edge.targetPort
-            ),
-        ),
-      }))
-    },
-    [pushUndo],
-  )
-
-  const updateConfig = useCallback(
-    (id: string, key: string, value: unknown) => {
-      // 连续打字合并成一步撤销（同一节点的同一字段）
-      pushUndo(undefined, `cfg:${id}:${key}`)
-      setGraph((g) => ({
-        ...g,
-        nodes: g.nodes.map((n) =>
-          n.id === id ? { ...n, config: { ...n.config, [key]: value } } : n,
-        ),
-      }))
-    },
-    [pushUndo],
-  )
 
   // ---- 节点面板 ----
   /**
@@ -445,13 +350,13 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       if (!dragStart.armed) {
-        addNode(type) // 纯点击：出现在当前可视区中央
+        ops.add(type) // 纯点击：出现在当前可视区中央
         return
       }
       setNewDrag(null)
       const rect = insideCanvas(ev)
       if (!rect) return // 松手在画布外：取消，不添加
-      addNode(type, toCanvas(ev.clientX, ev.clientY, rect))
+      ops.add(type, toCanvas(ev.clientX, ev.clientY, rect))
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -459,7 +364,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
 
   /** 键盘（Enter/Space）触发的 click：detail 为 0；鼠标的交给 mousedown/mouseup 流程 */
   const onPaletteItemClick = (e: React.MouseEvent, type: string) => {
-    if (e.detail === 0) addNode(type)
+    if (e.detail === 0) ops.add(type)
   }
 
   // ---- 画布事件 ----
@@ -605,7 +510,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     if (boxRef.current && boxMovedRef.current) {
       suppressClickRef.current = true
       // 框选收尾：整组固化到图层末尾（相对顺序保持原样）
-      bringToFront(selectedIds)
+      ops.bringToFront(selectedIds)
     }
     connectRef.current = null
     endPan()
@@ -761,10 +666,10 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
       const list = [...ids]
       const copied = copyNodes(list)
       if (copied === 0) return 0
-      deleteNodesByIds(list)
+      ops.removeMany(list)
       return copied
     },
-    [copyNodes, deleteNodesByIds],
+    [copyNodes, ops.removeMany],
   )
 
   /**
@@ -957,7 +862,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
         const ids = getSelectionIds()
         if (ids.size === 0) return
         e.preventDefault()
-        deleteNodesByIds([...ids])
+        ops.removeMany([...ids])
       }
     }
     window.addEventListener('keydown', onKey)
@@ -970,7 +875,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
     cutNodes,
     getSelectionIds,
     startPlacing,
-    deleteNodesByIds,
+    ops.removeMany,
     placing,
   ])
 
@@ -1070,7 +975,7 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             edges={graph.edges}
             nodeById={nodeById}
             posOf={posOf}
-            onDelete={deleteEdge}
+            onDelete={ops.removeEdge}
             pending={pendingEdge}
             effTypes={effTypes}
           />
@@ -1145,8 +1050,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
             effTypes={effTypes}
             report={report}
             versions={versions}
-            onUpdate={updateConfig}
-            onDelete={deleteNode}
+            onUpdate={ops.updateConfig}
+            onDelete={ops.remove}
           />
         )}
       </div>
@@ -1166,8 +1071,8 @@ export default function WorkflowEditor({ workflowId, onClose }: WorkflowEditorPr
           paste: (at) => {
             void pasteAt(at)
           },
-          remove: deleteNodesByIds,
-          add: addNode,
+          remove: ops.removeMany,
+          add: ops.add,
         }}
         onClose={closeMenu}
       />
