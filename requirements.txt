@@ -2,6 +2,7 @@ fastapi
 uvicorn
 sqlmodel
 aiosqlite
+greenlet
 websockets
 cryptography
 httpx
