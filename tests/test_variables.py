@@ -27,6 +27,10 @@ from tickneko.api.services.user.security import Pbkdf2PasswordHasher  # noqa: E4
 from tickneko.api.services.user.store_sql import SqlUserStore  # noqa: E402
 from tickneko.core.cache import Cache, CacheOptions  # noqa: E402
 from tickneko.workflow import SqlWorkflowStore  # noqa: E402
+from tickneko.workflow.nodes import registry  # noqa: E402
+from tickneko.workflow.nodes import (  # noqa: E402
+    StringViewer, VariableContext, declare_node_type,
+)
 
 #: 演示账号（见 tickneko.api.services.user.demo）—— 唯一自带的账号，且是管理员
 ADMIN = {"account": "admin", "password": "tickneko-admin"}
@@ -58,6 +62,7 @@ class Env:
     client: httpx.AsyncClient
     cache: Cache
     workflows: SqlWorkflowStore
+    app: FastAPI
 
 
 @pytest.fixture
@@ -80,7 +85,7 @@ async def env() -> AsyncIterator[Env]:
                 workflow_store=workflows,
             )
             async with client_for(app) as client:
-                yield Env(client=client, cache=store, workflows=workflows)
+                yield Env(client=client, cache=store, workflows=workflows, app=app)
         finally:
             await store.stop()
     finally:
@@ -277,3 +282,279 @@ class TestVariables:
         page = page_of(await env.client.get(VARIABLES_PATH, headers=auth(admin_token)))
         assert page["total"] == 1
         assert page["items"][0]["owner_id"] == ""
+
+
+async def writer_graph(env: Env, owner: str, node_type: str = "ds-list-append", key: str = "队列") -> str:
+    graph = await env.workflows.create(owner, "变量写入图")
+    await env.workflows.save_draft(graph.id, json.dumps({
+        "nodes": [{"id": "writer", "type": node_type, "config": {"key": key, "scope": "workflow", "action": "set"}}],
+        "edges": [],
+    }))
+    return graph.id
+
+
+def graph_params(ident: str, key: str = "队列") -> dict[str, str]:
+    return {"scope": "graph", "workflow_id": ident, "key": key}
+
+
+class TestVariableViewers:
+    async def test_discovery_filters_families_before_pagination(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        token, owner = await login(env.client, ADMIN)
+        await env.cache.list_push_right(f"workflow:acct:{owner}:a", "a", "a", "b")
+        await env.cache.hash_set(f"workflow:acct:{owner}:a:meta", {"a": "2", "b": "1"})
+        await env.cache.hash_set(f"workflow:acct:{owner}:a:idx", {"legacy": "1"})
+        await env.cache.hash_set(f"workflow:acct:{owner}:orphan:meta", {"stale": "1"})
+        await env.cache.set(f"workflow:acct:{owner}:b", "text")
+        keys = env.cache.keys
+
+        async def duplicates(pattern: str = "*") -> list[str]:
+            rows = await keys(pattern)
+            return rows + rows  # SCAN 可以重复返回；逻辑变量仍只计一次。
+
+        monkeypatch.setattr(env.cache, "keys", duplicates)
+        page = page_of(await env.client.get(VARIABLES_PATH, headers=auth(token), params={"limit": 1}))
+        assert page["total"] == 2
+        assert page["items"][0]["key"] == "a"
+        assert (page["items"][0]["type"], page["items"][0]["data"], page["items"][0]["length"]) == ("list", ["a", "a", "b"], 3)
+        page = page_of(await env.client.get(VARIABLES_PATH, headers=auth(token), params={"limit": 1, "offset": 1}))
+        assert [row["key"] for row in page["items"]] == ["b"]
+        assert page_of(await env.client.get(VARIABLES_PATH, headers=auth(token), params={"query": ":meta"}))["total"] == 0
+
+    async def test_node_source_handles_missing_meta_and_recreates_after_clear(self, env: Env) -> None:
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner)
+        key = f"workflow:graph:{ident}:队列"
+        await env.cache.list_push_right(key, "a", "a", "b")
+        params = graph_params(ident)
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params))
+        assert data["editable"] and data["length"] == 3
+        assert not await env.cache.exists(f"{key}:meta")  # view 不做修复。
+        data = page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"item": "b"}))
+        assert data["data"] == ["a", "a", "b", "b"]
+        assert await env.cache.hash_get_all(f"{key}:meta") == {"a": "2", "b": "2"}
+        data = page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"items": ["b", "b"]}))
+        assert data["length"] == 2 and await env.cache.hash_get_all(f"{key}:meta") == {"b": "2"}
+        page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"items": []}))
+        assert not await env.cache.exists(key) and not await env.cache.exists(f"{key}:meta")
+        assert page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params))["data"] == []
+        data = page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"item": ""}))
+        assert data["data"] == [""] and await env.cache.hash_get_all(f"{key}:meta") == {"": "1"}
+
+    @pytest.mark.parametrize("scope", ["account", "orphan", "missing-node", "invalid-graph"])
+    async def test_probe_fallback_preserves_family_linkage(self, env: Env, scope: str) -> None:
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner, node_type="unloaded-extension")
+        if scope == "orphan":
+            await env.workflows.delete(ident)
+        if scope == "invalid-graph":
+            await env.workflows.save_draft(ident, "invalid JSON")
+        params = {"scope": "account", "owner_id": owner, "key": "队列"} if scope == "account" else graph_params(ident)
+        key = f"workflow:acct:{owner}:队列" if scope == "account" else f"workflow:graph:{ident}:队列"
+        await env.cache.list_push_right(key, "a", "a")
+        await env.cache.hash_set(f"{key}:meta", {"a": "2"})
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params))
+        assert data["editable"]
+        page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"items": ["b", "b"]}))
+        assert await env.cache.hash_get_all(f"{key}:meta") == {"b": "2"}
+
+    @pytest.mark.parametrize("orphan", [False, True])
+    async def test_unidentified_list_is_read_only(self, env: Env, orphan: bool) -> None:
+        token, owner = await login(env.client, ADMIN)
+        params = {"scope": "graph", "workflow_id": "deleted", "key": "队列"} if orphan else {"scope": "account", "owner_id": owner, "key": "队列"}
+        key = "workflow:graph:deleted:队列" if orphan else f"workflow:acct:{owner}:队列"
+        await env.cache.list_push_right(key, "a")
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params))
+        assert data["type"] == "list" and data["data"] == ["a"] and not data["editable"]
+        response = await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"items": ["bad"]})
+        assert response.status_code == 409
+        assert await env.cache.list_range(key) == ["a"]
+        assert not await env.cache.exists(f"{key}:meta")
+
+    async def test_live_node_without_viewer_cannot_use_fallback(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(registry, "_SPECS", dict(registry._SPECS))
+        declare_node_type("private-variable")
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner, "private-variable")
+        key = f"workflow:graph:{ident}:队列"
+        await env.cache.list_push_right(key, "a")
+        await env.cache.hash_set(f"{key}:meta", {"a": "1"})
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=graph_params(ident)))
+        assert data["type"] is None and not data["editable"] and "未开放" in data["reason"]
+        response = await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=graph_params(ident), json={"item": "b"})
+        assert response.status_code == 409 and await env.cache.list_range(key) == ["a"]
+
+    @pytest.mark.parametrize("body", [{}, {"item": "x", "items": []}, {"items": ["x", {}]}, {"items": "x"}, {"item": "x", "unknown": 0}, {"key": "else", "item": "x"}, {"item": "x", "self": 0}])
+    async def test_viewer_errors_are_422_and_leave_data_intact(self, env: Env, body: dict[str, object]) -> None:
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner)
+        key = f"workflow:graph:{ident}:队列"
+        await env.cache.list_push_right(key, "original")
+        response = await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=graph_params(ident), json=body)
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert await env.cache.list_range(key) == ["original"]
+        assert not await env.cache.exists(f"{key}:meta")
+
+    async def test_account_dict_and_json_full_save(self, env: Env) -> None:
+        token, owner = await login(env.client, ADMIN)
+        params = {"scope": "account", "owner_id": owner, "key": "配置"}
+        key = f"workflow:acct:{owner}:配置"
+        await env.cache.hash_set(key, {"old": "x", "kept": "y"})
+        data = page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"fields": {"new": ""}}))
+        assert data["type"] == "dict" and data["data"] == {"new": ""}
+        page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"fields": {}}))
+        assert not await env.cache.exists(key)
+        params["key"] = "JSON"
+        await env.cache.set_json(f"workflow:acct:{owner}:JSON", {"initial": True})
+        for value in (False, 0, None):
+            data = page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"value": value}))
+            assert data["type"] == "json" and type(data["data"]) is type(value) and data["data"] == value
+
+    async def test_extension_receives_complete_body_and_trusted_context(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(registry, "_SPECS", dict(registry._SPECS))
+        seen: list[tuple[dict[str, object], VariableContext]] = []
+
+        class ExtensionViewer(StringViewer):
+            async def add(self, **params: object) -> None:
+                seen.append((params, self.context))
+                await self.context.cache.set(self.context.full_key, "updated")
+
+        declare_node_type("extended-variable", variable_viewer=ExtensionViewer)
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner, "extended-variable")
+        await env.cache.set(f"workflow:graph:{ident}:队列", "initial")
+        body = {"value": "x", "option": False, "offset": 0, "owner_id": "injected", "context": {"key": "else"}}
+        page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=graph_params(ident), json=body))
+        assert seen[0][0] == body
+        assert seen[0][1].owner_id == owner and seen[0][1].key == "队列"
+
+    async def test_equal_priority_viewers_disable_writes(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(registry, "_SPECS", dict(registry._SPECS))
+
+        class FirstViewer(StringViewer):
+            priority = 100
+
+        class SecondViewer(StringViewer):
+            priority = 100
+
+        declare_node_type("conflict-first", variable_viewer=FirstViewer)
+        declare_node_type("conflict-second", variable_viewer=SecondViewer)
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner, "conflict-first")
+        await env.workflows.save_draft(ident, json.dumps({"nodes": [
+            {"id": "a", "type": "conflict-first", "config": {"key": "队列"}},
+            {"id": "b", "type": "conflict-second", "config": {"key": "队列"}},
+        ], "edges": []}))
+        key = f"workflow:graph:{ident}:队列"
+        await env.cache.set(key, "original")
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=graph_params(ident)))
+        assert data["type"] == "str" and not data["editable"] and "冲突" in data["reason"]
+        response = await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=graph_params(ident), json={"value": "bad"})
+        assert response.status_code == 409 and await env.cache.get(key) == "original"
+
+    async def test_modify_enforces_auth_and_real_graph_ownership(self, env: Env) -> None:
+        _, admin_id = await login(env.client, ADMIN)
+        token, plain_id = await register(env.client, PLAIN)
+        ident = await writer_graph(env, admin_id, "cache", "开关")
+        params = graph_params(ident, "开关")
+        key = f"workflow:graph:{ident}:开关"
+        await env.cache.set(key, "original")
+        assert (await env.client.post(f"{VARIABLES_PATH}/add", params=params, json={"value": "bad"})).status_code == 401
+        params["owner_id"] = plain_id
+        assert (await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"value": "bad"})).status_code == 403
+        await env.workflows.delete(ident)
+        assert (await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params)).status_code == 403
+        assert await env.cache.get(key) == "original"
+
+    async def test_partial_storage_failure_never_returns_success(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tickneko.core.cache.models import CacheError
+
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner)
+        key = f"workflow:graph:{ident}:队列"
+        await env.cache.list_push_right(key, "original")
+        set_hash = env.cache.hash_set
+
+        async def fail_meta(target: str, items: dict[str, str], ttl: float | None = None) -> int:
+            if target == f"{key}:meta":
+                raise CacheError("meta 写入失败")
+            return await set_hash(target, items, ttl=ttl)
+
+        monkeypatch.setattr(env.cache, "hash_set", fail_meta)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app, raise_app_exceptions=False), base_url="http://test") as client:
+            response = await client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=graph_params(ident), json={"items": ["new"]})
+        assert response.status_code == 500 and not response.json()["success"]
+        assert await env.cache.list_range(key) == ["new"]  # 非原子边界明确暴露，而非宣称回滚。
+
+    async def test_unknown_variable_does_not_create_probe_keys(self, env: Env) -> None:
+        token, owner = await login(env.client, ADMIN)
+        params = {"scope": "account", "owner_id": owner, "key": "missing"}
+        assert (await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params)).status_code == 404
+        assert (await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"item": "x"})).status_code == 404
+        assert await env.cache.keys("workflow:*") == []
+
+    @pytest.mark.parametrize("body", [{}, {"field": "x"}, {"value": "x"}, {"fields": None}, {"fields": []}, {"field": "x", "value": 0, "fields": {}}, {"fields": {"valid": "x", "invalid": []}}, {"fields": {}, "unknown": False}])
+    async def test_dict_errors_are_422_before_overwrite(self, env: Env, body: dict[str, object]) -> None:
+        token, owner = await login(env.client, ADMIN)
+        params = {"scope": "account", "owner_id": owner, "key": "配置"}
+        key = f"workflow:acct:{owner}:配置"
+        await env.cache.hash_set(key, {"original": "x"})
+        response = await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json=body)
+        assert response.status_code == 422
+        assert await env.cache.hash_get_all(key) == {"original": "x"}
+
+    async def test_body_expiring_during_discovery_does_not_fail_page(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        token, owner = await login(env.client, ADMIN)
+        key = f"workflow:acct:{owner}:expired"
+        await env.cache.set(key, "x")
+        keys = env.cache.keys
+
+        async def expire_after_scan(pattern: str = "*") -> list[str]:
+            found = await keys(pattern)
+            await env.cache.delete(key)
+            return found
+
+        monkeypatch.setattr(env.cache, "keys", expire_after_scan)
+        assert page_of(await env.client.get(VARIABLES_PATH, headers=auth(token)))["items"] == []
+
+    async def test_published_source_takes_precedence_over_new_draft(self, env: Env) -> None:
+        from tickneko.workflow import canonical_graph_json, graph_checksum
+
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner, "cache", "开关")
+        record = await env.workflows.get(ident)
+        graph = {"nodes": [{"id": "writer", "type": "cache", "config": {"key": "开关", "action": "set"}}], "edges": []}
+        version, _ = await env.workflows.add_version(record, graph_json=canonical_graph_json(graph), checksum=graph_checksum(graph))
+        await env.workflows.publish(ident, version.version)
+        await env.workflows.save_draft(ident, json.dumps({"nodes": [{"id": "writer", "type": "ds-list-append", "config": {"key": "开关"}}], "edges": []}))
+        key = f"workflow:graph:{ident}:开关"
+        await env.cache.set(key, "false")
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=graph_params(ident, "开关")))
+        assert data["type"] == "str" and data["data"] == "false" and data["editable"]
+
+    async def test_declared_storage_mismatch_does_not_bypass_viewer(self, env: Env) -> None:
+        token, owner = await login(env.client, ADMIN)
+        ident = await writer_graph(env, owner, "cache", "开关")
+        await env.cache.hash_set(f"workflow:graph:{ident}:开关", {"field": "value"})
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=graph_params(ident, "开关")))
+        assert data["type"] is None and not data["editable"]
+
+    async def test_name_rule_can_identify_account_list_without_meta(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tickneko.workflow.nodes import VariableRule
+        from tickneko.workflow.nodes.ds_container import DsListViewer
+
+        monkeypatch.setattr(registry, "_SPECS", dict(registry._SPECS))
+
+        class NamedListViewer(DsListViewer):
+            priority = 200
+            rules = (VariableRule(name_pattern="recognized-list"),)
+
+        declare_node_type("named-list-writer", variable_viewer=NamedListViewer)
+        token, owner = await login(env.client, ADMIN)
+        key = f"workflow:acct:{owner}:recognized-list"
+        await env.cache.list_push_right(key, "a", "a")
+        params = {"scope": "account", "owner_id": owner, "key": "recognized-list"}
+        data = page_of(await env.client.get(f"{VARIABLES_PATH}/value", headers=auth(token), params=params))
+        assert data["editable"] and not await env.cache.exists(f"{key}:meta")
+        page_of(await env.client.post(f"{VARIABLES_PATH}/add", headers=auth(token), params=params, json={"item": "b"}))
+        assert await env.cache.hash_get_all(f"{key}:meta") == {"a": "2", "b": "1"}
