@@ -1,0 +1,90 @@
+/* 查看器只使用展示类型与结构化数据；颜色沿用主题令牌。 */
+.preview {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 120px;
+  overflow: auto;
+}
+.expanded {
+  max-height: none;
+}
+.list {
+  margin: 0;
+  padding-left: 24px;
+}
+.dictionary {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(60px, 1fr) minmax(0, 2fr);
+  gap: 4px 12px;
+}
+.dictionary dd {
+  margin: 0;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.hint {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.error {
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  white-space: pre-wrap;
+}
+.editor {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.control {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  color: var(--text-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font: inherit;
+}
+textarea.control {
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+.valueInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: start;
+  gap: 6px;
+}
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.itemHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.newItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
