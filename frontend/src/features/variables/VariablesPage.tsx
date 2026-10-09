@@ -1,7 +1,7 @@
 /**
  * 变量查看页：GET /api/variables。
  *
- * 看工作流「缓存」节点写下的变量（口径见 docs/cache/cache.md）：
+ * 查看节点拥有的变量，并由 VariableValueViewer 编辑（口径见 docs/variables/variables.md）：
  * - 作用域分两档：图级（只有某一张图看得见）/ 账号级（同一账号的工作流共享）；
  * - **权限在服务端**：管理员看得到所有人的变量，可以用归属下拉筛到某一个人；
  *   普通用户后端强制只返回自己名下的，界面上直接不露出归属那一项 —— 前端不做「假权限」。
@@ -23,6 +23,7 @@ import ErrorBox from '../../common/ErrorBox'
 import { usePagedQuery } from '../../common/usePagedQuery'
 import Pagination from '../../common/Pagination'
 import styles from './VariablesPage.module.css'
+import VariableValueViewer from './VariableValueViewer'
 
 /** 每页条数可选项（后端单次上限 500）。 */
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200] as const
@@ -125,7 +126,7 @@ export default function VariablesPage() {
         <div>
           <h1 className={styles.title}>变量查看</h1>
           <p className={styles.sub}>
-            查看工作流「缓存」节点写入的变量：图级只属于某一张图，账号级在同一账号的工作流之间共享。
+            查看和编辑工作流节点写入的变量：图级只属于某一张图，账号级在同一账号的工作流之间共享。
             {isAdmin
               ? '你是管理员，可以查看所有人的变量并按归属筛选。'
               : '普通账号只显示自己名下的变量。'}
@@ -245,9 +246,7 @@ export default function VariablesPage() {
                         )}
                         <span className={styles.ttl}>{formatTtl(entry.ttl)}</span>
                       </div>
-                      <div className={styles.value} title={entry.value}>
-                        {entry.value ? entry.value : '（空值）'}
-                      </div>
+                      <VariableValueViewer entry={entry} onChanged={() => query.refresh(true)} />
                     </div>
                   </div>
                 </li>

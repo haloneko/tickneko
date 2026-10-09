@@ -4,6 +4,8 @@
       base.py            契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / 运行时上下文
       port_types.py      端口类型定义表（唯一常改的地方：画布配色 / 图例 / 数据流语义都从它来）
       registry.py        注册表：register_node / declare_node_type / get_spec / load_node_modules
+      variable_viewer.py  查看器契约：可信上下文、匹配规则、view / add 与展示结果
+      variable_viewers.py 显式基础兜底：str / json / list / dict
       triggers.py        内置节点：三个触发器（trigger-message 消息 / trigger-time 定时 / trigger-event 事件）
       end.py             内置节点：end（图终点）
       log.py             内置节点：log（按级别写业务日志）
@@ -115,7 +117,11 @@ from .registry import (
     register_executor,
     register_node,
     registered_types,
+    register_variable_viewer,
+    registered_variable_viewers,
 )
+from .variable_viewer import VariableContext, VariableRule, VariableView, VariableViewer
+from .variable_viewers import DictViewer, JsonViewer, ListViewer, StringViewer
 from .test import exec_test
 from .triggers import (
     EVENT_TYPE_LABELS,
@@ -136,6 +142,14 @@ __all__ = [
     "NodeFailure",
     "EnvironmentFailure",
     "NodeSpec",
+    "VariableViewer",
+    "VariableContext",
+    "VariableRule",
+    "VariableView",
+    "StringViewer",
+    "JsonViewer",
+    "ListViewer",
+    "DictViewer",
     "NodeRole",
     "NodeCategory",
     "CATEGORY_LABELS",
@@ -156,6 +170,8 @@ __all__ = [
     "get_executor",
     "get_spec",
     "registered_types",
+    "register_variable_viewer",
+    "registered_variable_viewers",
     "load_node_modules",
     # 内置节点：import 上面那些模块即完成注册，函数本身也导出（复用 / 测试 / 换实现）
     "exec_trigger_message",

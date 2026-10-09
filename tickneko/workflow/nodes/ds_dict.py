@@ -79,6 +79,8 @@ from .base import (
 )
 from tickneko.core.cache.models import CacheError
 from .registry import register_node
+from .variable_viewer import text_parameter
+from .variable_viewers import DictViewer
 
 #: 允许的作用域，**顺序即画布下拉顺序**
 DS_DICT_SCOPE_ORDER: tuple[str, ...] = ("workflow", "account")
@@ -180,6 +182,15 @@ async def _ensure_hash(
 
 
 # --------------------------------------------------------------------------- 节点注册
+class DsDictViewer(DictViewer):
+    """字典节点拥有文本编码；完整 fields 保存删除未提交的旧字段。"""
+
+    priority = 100
+
+    def encode(self, value: Any) -> str:
+        return _text(text_parameter(value))
+
+
 @register_node(
     "ds-dict-set",
     label="键值对·设值",
@@ -204,6 +215,7 @@ async def _ensure_hash(
         ConfigField("value", "值"),
     ],
     validator=validate_ds_dict_node,
+    variable_viewer=DsDictViewer,
 )
 async def exec_ds_dict_set(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """设值：写 ``field=value``（HSET 增量写，不碰其他字段）；变量不存在自动建空字典。"""
@@ -241,6 +253,7 @@ async def exec_ds_dict_set(node: WorkflowNode, ctx: NodeExecutionContext) -> dic
         ConfigField("default", "键不存在时的默认值"),
     ],
     validator=validate_ds_dict_node,
+    variable_viewer=DsDictViewer,
 )
 async def exec_ds_dict_get(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """取值：HGET 单字段读（不整表拉取）；键不存在**不算事故**，送 ``default``。"""
@@ -287,6 +300,7 @@ async def exec_ds_dict_get(node: WorkflowNode, ctx: NodeExecutionContext) -> dic
         ConfigField("field", "键名"),
     ],
     validator=validate_ds_dict_node,
+    variable_viewer=DsDictViewer,
 )
 async def exec_ds_dict_contains(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """查存在：分流节点，HEXISTS 探测（O(1)），存在走 ``true``、不存在走 ``false``。
@@ -329,6 +343,7 @@ async def exec_ds_dict_contains(node: WorkflowNode, ctx: NodeExecutionContext) -
         ConfigField("field", "键名"),
     ],
     validator=validate_ds_dict_node,
+    variable_viewer=DsDictViewer,
 )
 async def exec_ds_dict_remove(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """删除键：HDEL 单字段删（不整表重写）；不存在的键不报错（日志注明）。"""
@@ -361,6 +376,7 @@ async def exec_ds_dict_remove(node: WorkflowNode, ctx: NodeExecutionContext) -> 
         ConfigField("key", "变量名"),
     ],
     validator=validate_ds_dict_node,
+    variable_viewer=DsDictViewer,
 )
 async def exec_ds_dict_keys(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """取键列表：HKEYS 只列字段名（不搬值），沿 list 端口原样送出。"""
@@ -392,6 +408,7 @@ async def exec_ds_dict_keys(node: WorkflowNode, ctx: NodeExecutionContext) -> di
         ConfigField("key", "变量名"),
     ],
     validator=validate_ds_dict_node,
+    variable_viewer=DsDictViewer,
 )
 async def exec_ds_dict_length(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """条目数：HLEN 服务端数（O(1)，不拉数据），文本化送出。"""

@@ -23,8 +23,15 @@ export interface VariableEntry {
   workflow_id: string
   /** 变量名 */
   key: string
-  /** 当前值（按文本存） */
+  /** 兼容旧只读调用方的文本预览 */
   value: string
+  /** 查看器的展示类型，与存储类型无关 */
+  type: 'json' | 'list' | 'dict' | 'str' | null
+  data: unknown
+  /** list 本体长度 */
+  length: number | null
+  editable: boolean
+  reason: string
   /** 剩余秒数；null = 永不过期 */
   ttl: number | null
 }
@@ -50,4 +57,22 @@ export interface VariableSearchParams {
 /** 列出变量。params 里 undefined 的字段不发。 */
 export function listVariables(params: VariableSearchParams = {}) {
   return http.get<VariablePage>('/variables', { params })
+}
+
+/** 修改字段由节点查看器定义；扩展字段完整交给服务端校验。 */
+export type VariableMutation = Record<string, unknown>
+
+function variableIdentity(entry: VariableEntry): Record<string, string> {
+  return entry.scope === 'account'
+    ? { scope: 'account', owner_id: entry.owner_id, key: entry.key }
+    : { scope: 'graph', workflow_id: entry.workflow_id, key: entry.key }
+}
+
+export function viewVariable(entry: VariableEntry) {
+  return http.get<VariableEntry>('/variables/value', { params: variableIdentity(entry) })
+}
+
+export function addVariable(entry: VariableEntry, params: VariableMutation) {
+  const identity = new URLSearchParams(variableIdentity(entry))
+  return http.post<VariableEntry>(`/variables/add?${identity}`, params)
 }

@@ -1,5 +1,7 @@
 # 缓存：核心层（`tickneko.core.cache`）+ 节点层（cache 节点）
 
+变量查看器、编辑接口与 ds-list 双键族联动见 [变量文档](../variables/variables.md)。
+
 > 本模块文档是**核心层**（一套可换后端的键值存取设施）。缓存还有**第二层**：
 > 工作流里的 `cache` 节点（`tickneko/workflow/nodes/cache.py`）—— 它负责把「跨执行记住
 > 状态」这件事翻译成核心层的 `get` / `set` 调用，并自己定下**键前缀与作用域**。两层关系

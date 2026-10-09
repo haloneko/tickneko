@@ -545,13 +545,12 @@ async def test_ds_list_append_get_contains_length() -> None:
     node_ = WorkflowNode(id="c1", type="ds-list-append", config={"key": "队列"})
     ctx.inputs = {"item": "A"}
     assert (await exec_ds_list_append(node_, ctx))["obj_out"] == "队列"
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "1"}  # 加元素计数+1
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1"}  # 索引同步+1
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "1"}
+    assert "workflow:graph:w1:队列:idx" not in fake.data
     ctx.inputs = {"item": "B"}
     assert (await exec_ds_list_append(node_, ctx))["obj_out"] == "队列"
     assert fake.data["workflow:graph:w1:队列"] == ["A", "B"]
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "2"}
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1", "B": "1"}
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "1", "B": "1"}
 
     node_ = WorkflowNode(id="c1", type="ds-list-get", config={"key": "队列"})
     ctx.inputs = {"index": "0"}
@@ -581,34 +580,30 @@ async def test_ds_list_double_ended_push_pop() -> None:
     for item in ("A", "B"):
         ctx.inputs = {"item": item}
         _ = await exec_ds_list_append(node_, ctx)
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "2"}
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1", "B": "1"}
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "1", "B": "1"}
 
     node_ = WorkflowNode(id="c1", type="ds-list-push-left", config={"key": "队列"})
     ctx.inputs = {"item": "0"}
     assert (await exec_ds_list_push_left(node_, ctx))["obj_out"] == "队列"
     assert fake.data["workflow:graph:w1:队列"] == ["0", "A", "B"]
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "3"}  # 头插也计数+1
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"0": "1", "A": "1", "B": "1"}
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"0": "1", "A": "1", "B": "1"}
 
     node_ = WorkflowNode(id="c1", type="ds-list-pop-left", config={"key": "队列"})
     assert (await exec_ds_list_pop_left(node_, ctx))["value_out"] == "0"  # 队头弹出
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "2"}  # 弹出计数-1
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1", "B": "1"}  # 索引归零才删
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "1", "B": "1"}
     node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
     assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "B"  # 队尾弹出
     assert fake.data["workflow:graph:w1:队列"] == ["A"]
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "1"}
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1"}
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "1"}
 
     # 弹空不算事故：送默认值，流程继续（计数不跌到负、索引不误删）
     node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
     assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "A"
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "0"}
+    assert "workflow:graph:w1:队列:meta" not in fake.data
     assert "workflow:graph:w1:队列:idx" not in fake.data  # 索引删空后键整个没了
     ctx.inputs = {"default": "空了"}
     assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "空了"
-    assert fake.data["workflow:graph:w1:队列:meta"] == {"count": "0"}
+    assert "workflow:graph:w1:队列:meta" not in fake.data
     assert "workflow:graph:w1:队列:idx" not in fake.data
 
 
@@ -622,11 +617,11 @@ async def test_ds_list_contains_survives_duplicate_items() -> None:
     for item in ("A", "A"):
         ctx.inputs = {"item": item}
         _ = await exec_ds_list_append(node_, ctx)
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "2"}
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "2"}
 
     node_ = WorkflowNode(id="c1", type="ds-list-pop", config={"key": "队列"})
     assert (await exec_ds_list_pop(node_, ctx))["value_out"] == "A"
-    assert fake.data["workflow:graph:w1:队列:idx"] == {"A": "1"}  # 次数 2->1，索引还在
+    assert fake.data["workflow:graph:w1:队列:meta"] == {"A": "1"}  # 次数 2->1，计数还在
 
     node_ = WorkflowNode(id="c1", type="ds-list-contains", config={"key": "队列"})
     ctx.inputs = {"item": "A"}

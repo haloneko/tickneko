@@ -21,6 +21,8 @@ tickneko/workflow/
 ├── nodes/           ★ 节点执行器：一类节点一个文件 + 注册表（**写自己的节点看这里**）
 │   ├── base.py          契约：NodeExecutor / NodeSpec / ConfigField / PortSpec / NodeExecutionContext
 │   ├── registry.py      注册表：register_node / declare_node_type / get_spec / load_node_modules
+│   ├── variable_viewer.py   变量查看器契约：上下文 / 匹配规则 / view / add
+│   ├── variable_viewers.py  显式基础查看器；接入规则见 ../variables/variables.md
 │   ├── triggers.py      内置：三个触发器（trigger-message 消息 / trigger-time 定时 / trigger-event 事件）
 │   ├── end.py           内置：end（图终点）
 │   ├── log.py           内置：log（按级别写业务日志；内容从 message 入口来）

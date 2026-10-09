@@ -288,6 +288,7 @@ api/*  ──►  services/*  ──►  (services/auth ──► services/user)
 | `services/user/__init__.py` | 用户模块汇总。 |
 | `services/session/__init__.py` | 会话模块汇总（登录会话、设备信息、令牌映射、吊销）。 |
 | `services/profile/__init__.py` | 个人设置模块汇总（昵称 + 头像、头像存储协议与默认实现）。 |
+| `services/variables/__init__.py`、`service.py` | 逻辑变量发现、节点来源反查与查看器探测 / 分派；协议与接口见 [变量文档](../../docs/variables/variables.md)。 |
 
 ### 4.2 services/user/ —— 用户域（不管 HTTP）
 

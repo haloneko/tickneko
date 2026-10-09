@@ -43,6 +43,7 @@ from tickneko.core.scheduler import TaskManager
 from ..logging import workflow_logger
 from ..models import ValidationIssue, WorkflowNode
 from .port_types import PortType
+from .variable_viewer import VariableViewer
 
 #: 节点执行函数：(节点, 上下文) -> 本节点产出（键 = 已声明的输出端口名）
 NodeExecutor = Callable[[WorkflowNode, "NodeExecutionContext"], Awaitable[dict[str, Any]]]
@@ -229,10 +230,16 @@ class NodeSpec:
     category: NodeCategory = "data"
     inputs: tuple[PortSpec, ...] = ()
     outputs: tuple[PortSpec, ...] = ()
+    #: 写入节点拥有的变量查看 / 修改实现，默认不开放；见 docs/variables/variables.md。
+    variable_viewer: type[VariableViewer] | None = None
 
     def __post_init__(self) -> None:
         """透传对 ``tie`` 必须**指向另一侧的某个真实端口** —— 写错 id 是静默失效
         （画布上表现为两端颜色对不上），注册时当场报错更好排查。"""
+        if self.variable_viewer is not None and (
+            not isinstance(self.variable_viewer, type) or not issubclass(self.variable_viewer, VariableViewer)
+        ):
+            raise ValueError("variable_viewer 必须是 VariableViewer 子类")
         for port, others, side in (
             *((p, self.outputs, "输出") for p in self.inputs),
             *((p, self.inputs, "输入") for p in self.outputs),

@@ -14,6 +14,7 @@
 | [app/app.md](app/app.md) | 根目录 `app.py` / `config.py` | 启动顺序与停机收尾、数据库探测、配置区域与三层覆盖、报错口径、Kook 密钥的派生规则 |
 | [logger/logger.md](logger/logger.md) | `tickneko.core.logger` | 异步日志：root + child / bind / route、目标与过滤器、检索与刷新、进程门面 |
 | [cache/cache.md](cache/cache.md) | `tickneko.core.cache` + cache 节点 | 一套 API 两种后端（Redis / 内存）、后端协议约定、降级与命名空间、配置注入；cache 节点的键前缀 / 作用域 / get-set 口径（文末「缓存节点」） |
+| [variables/variables.md](variables/variables.md) | 节点查看器 + 变量接口 + 前端编辑器 | IoC 注册与探测、四种展示类型、全量保存、ds-list 双键族频次联动、旧 idx 按需重建 |
 | [scheduler/scheduler.md](scheduler/scheduler.md) | `tickneko.core.scheduler` | cron 语法、单 / 多实例、错过不补、失败隔离、红黑树排程索引 |
 | [bridge/bridge.md](bridge/bridge.md) | `tickneko.platforms.bridge` | 规范化事件 + 适配器协议 + Gateway 总线、OneBot / Kook 两个适配器、怎么写第三个平台 |
 | [workflow/workflow.md](workflow/workflow.md) | `tickneko.workflow` | 模块索引、节点契约与注册即校验、写自己的节点（第 5 节）、各模块设计要点（第 7 节）、**从画布到运行：保存版本 → 发布 → 运行开关**（第 8 节，含画布截图） |

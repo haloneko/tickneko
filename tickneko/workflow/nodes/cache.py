@@ -59,6 +59,8 @@ from .base import (
     input_value,
 )
 from .registry import register_node
+from .variable_viewer import VariableContext, VariableRule, text_parameter
+from .variable_viewers import StringViewer
 
 #: 允许的动作，**顺序即画布下拉顺序**
 CACHE_ACTION_ORDER: tuple[str, ...] = ("get", "set")
@@ -116,6 +118,20 @@ def _clip(raw: str) -> str:
     return raw if len(raw) <= CLIP_CHARS else raw[:CLIP_CHARS] + "…"
 
 
+class CacheViewer(StringViewer):
+    """cache 的写动作注册文本查看器，保留运行时的标量编码。"""
+
+    priority = 100
+    rules = (VariableRule(actions=("set",)),)
+
+    @classmethod
+    async def probe(cls, context: VariableContext) -> bool:
+        return False  # 来源丢失后由显式注册的 str / json 基础查看器探测。
+
+    def encode(self, value: Any) -> str:
+        return text_parameter(value)
+
+
 @register_node(
     "cache",
     label="缓存",
@@ -142,6 +158,7 @@ def _clip(raw: str) -> str:
         ConfigField("default", "默认值"),
     ],
     validator=validate_cache_node,
+    variable_viewer=CacheViewer,
 )
 async def exec_cache(node: WorkflowNode, ctx: NodeExecutionContext) -> dict[str, Any]:
     """按 ``action`` 读 / 写一个键，产出 ``cache_value``。"""

@@ -4,9 +4,14 @@
 """
 from __future__ import annotations
 
-from typing import ClassVar
+import json
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from tickneko.workflow.nodes.variable_viewer import VariableViewType
+
+from ...services.variables import VariableSnapshot
 
 
 class VariableData(BaseModel):
@@ -24,8 +29,26 @@ class VariableData(BaseModel):
     key: str = Field(description="变量名")
     #: 当前值（缓存层按文本存，见 docs/cache/cache.md）
     value: str = Field(default="", description="变量当前值")
+    type: VariableViewType | None = Field(default=None, description="查看器展示类型；null = 不支持查看")
+    data: Any = Field(default=None, description="查看器返回的结构化展示数据")
+    length: int | None = Field(default=None, description="list 本体长度")
+    editable: bool = Field(default=False, description="是否允许修改")
+    reason: str = Field(default="", description="不能查看或修改的原因")
     #: 剩余存活秒数；``None`` = 永不过期
     ttl: float | None = Field(default=None, description="剩余秒数；null = 永不过期")
+
+    @classmethod
+    def from_snapshot(cls, snapshot: VariableSnapshot) -> VariableData:
+        context, view = snapshot.context, snapshot.view
+        # value 留给已有只读调用方；前端编辑使用 type / data，不猜 Redis 结构。
+        value = "" if view.type is None else (
+            view.data if view.type == "str" else json.dumps(view.data, ensure_ascii=False)
+        )
+        return cls(
+            scope=context.scope, owner_id=context.owner_id, workflow_id=context.workflow_id,
+            key=context.key, value=value, type=view.type, data=view.data, length=view.length,
+            editable=view.editable, reason=view.reason, ttl=snapshot.ttl,
+        )
 
 
 class VariablePage(BaseModel):
