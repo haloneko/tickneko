@@ -31,9 +31,11 @@ from .base import (
     NodeSpec,
     PortSpec,
 )
+from .variable_viewer import VariableViewer
 
 #: 节点类型名 -> 注册规格（执行器 + 字段规则 + 拓扑约束）
 _SPECS: dict[str, NodeSpec] = {}
+_VARIABLE_VIEWERS: set[type[VariableViewer]] = set()
 
 
 def register_executor(
@@ -53,6 +55,7 @@ def register_executor(
     category: NodeCategory = "data",
     inputs: Sequence[PortSpec] = (),
     outputs: Sequence[PortSpec] = (),
+    variable_viewer: type[VariableViewer] | None = None,
 ) -> None:
     """注册某类型节点的执行函数及其校验规则；重复注册覆盖。
 
@@ -74,6 +77,7 @@ def register_executor(
         category=category,
         inputs=tuple(inputs),
         outputs=tuple(outputs),
+        variable_viewer=variable_viewer,
     )
 
 
@@ -93,6 +97,7 @@ def declare_node_type(
     category: NodeCategory = "data",
     inputs: Sequence[PortSpec] = (),
     outputs: Sequence[PortSpec] = (),
+    variable_viewer: type[VariableViewer] | None = None,
 ) -> None:
     """只登记类型与校验规则、执行器留空。
 
@@ -115,6 +120,7 @@ def declare_node_type(
         category=category,
         inputs=tuple(inputs),
         outputs=tuple(outputs),
+        variable_viewer=variable_viewer,
     )
 
 
@@ -134,6 +140,7 @@ def register_node(
     category: NodeCategory = "data",
     inputs: Sequence[PortSpec] = (),
     outputs: Sequence[PortSpec] = (),
+    variable_viewer: type[VariableViewer] | None = None,
 ) -> Callable[[NodeExecutor], NodeExecutor]:
     """装饰器写法：在节点函数上标类型与规则即完成注册。
 
@@ -170,6 +177,7 @@ def register_node(
             category=category,
             inputs=inputs,
             outputs=outputs,
+            variable_viewer=variable_viewer,
         )
         return executor
 
@@ -190,6 +198,20 @@ def get_executor(node_type: str) -> NodeExecutor | None:
 def registered_types() -> tuple[str, ...]:
     """已登记的类型名（排序后）。排查「我那个节点到底注册上没有」时看它。"""
     return tuple(sorted(_SPECS))
+
+
+def register_variable_viewer(viewer: type[VariableViewer]) -> None:
+    """显式注册基础兜底；节点查看器由 NodeSpec 自动收集、同类去重。"""
+    if not issubclass(viewer, VariableViewer):
+        raise ValueError("查看器必须是 VariableViewer 子类")
+    _VARIABLE_VIEWERS.add(viewer)
+
+
+def registered_variable_viewers() -> tuple[type[VariableViewer], ...]:
+    viewers = _VARIABLE_VIEWERS | {
+        spec.variable_viewer for spec in _SPECS.values() if spec.variable_viewer is not None
+    }
+    return tuple(sorted(viewers, key=lambda viewer: (viewer.__module__, viewer.__qualname__)))
 
 
 def load_node_modules(*module_names: str) -> list[str]:
